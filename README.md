@@ -1,6 +1,6 @@
-# nodesort
+# NodeSort
 
-[![CI](https://github.com/tlacaelel666/nodesort/actions/workflows/ci.yml/badge.svg)](https://github.com/tlacaelel666/nodesort/actions/workflows/ci.yml)
+[![CI](https://github.com/jakobmina/NodeSort/actions/workflows/ci.yml/badge.svg)](https://github.com/jakobmina/NodeSort/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Parallel, in-place sorting of 32-bit integer arrays for C.** One call, every core, no
@@ -110,6 +110,17 @@ cc app.c $(pkg-config --cflags --libs nodesort)
 ```
 
 When linking the static library without CMake or pkg-config, define `NODESORT_STATIC`.
+
+## History
+
+NodeSort started as a *node-based* bucket sort: split the known value range `[min, max]` into
+nodes, let each element classify itself into its node in O(1), then sort the nodes in parallel.
+That prototype (versions v1/v2 and a text-sorting variant) is kept in [`legacy/`](legacy/).
+
+The library keeps the core idea — classify by value instead of comparing elements — but in the
+form of a radix sort, where the "nodes" are the 256 buckets of each 8-bit digit. This fixes the two
+problems of fixed range nodes: skewed data no longer piles up on a single thread, and there is no
+`max - min` arithmetic to overflow or divide by zero.
 
 ## Versioning
 

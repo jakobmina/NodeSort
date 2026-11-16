@@ -21,4 +21,5 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Replaces the original prototype (range-bucket sort, variants v1/v2), which crashed on empty input,
-  on arrays with all-equal values and on value ranges that overflow `int`.
+  on arrays with all-equal values and on value ranges that overflow `int`. The prototype and the
+  text-sorting variant are archived, unbuilt, in `legacy/`.

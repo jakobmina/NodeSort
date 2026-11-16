@@ -12,7 +12,7 @@ endforeach()
 project(nodesort
   VERSION ${_ns_MAJOR}.${_ns_MINOR}.${_ns_PATCH}
   DESCRIPTION "Parallel in-place sorting of 32-bit integer arrays"
-  HOMEPAGE_URL "https://github.com/tlacaelel666/nodesort"
+  HOMEPAGE_URL "https://github.com/jakobmina/NodeSort"
   LANGUAGES C)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)

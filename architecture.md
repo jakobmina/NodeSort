@@ -83,5 +83,5 @@ built against the installed library (find_package and pkg-config), packaging and
 - Needs 4·n bytes of extra memory; no in-place mode.
 - The fuzzer's inputs are too small to reach the parallel path; the property tests cover it.
 - ThreadSanitizer needs `vm.mmap_rnd_bits=28` on recent Linux kernels to start.
-- Homepage and package contact (`github.com/tlacaelel666/nodesort`) are inferred from git config
-  (unconfirmed: no remote exists yet).
+- The original prototype lives unbuilt in `legacy/`; it is not maintained and keeps its known
+  crashes.

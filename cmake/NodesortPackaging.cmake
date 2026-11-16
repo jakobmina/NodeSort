@@ -1,7 +1,7 @@
 # CPack: source/binary archives everywhere, .deb and .rpm on Linux.
 set(CPACK_PACKAGE_NAME "nodesort")
-set(CPACK_PACKAGE_VENDOR "tlacaelel666")
-set(CPACK_PACKAGE_CONTACT "tlacaelel666 <jakocrazykigs@gmail.com>")
+set(CPACK_PACKAGE_VENDOR "jakobmina")
+set(CPACK_PACKAGE_CONTACT "jakobmina <jakocrazykigs@gmail.com>")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
 set(CPACK_PACKAGE_HOMEPAGE_URL "${PROJECT_HOMEPAGE_URL}")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
