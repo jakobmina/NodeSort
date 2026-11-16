@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=@NODESORT_PC_LIBDIR@
+includedir=@NODESORT_PC_INCLUDEDIR@
+
+Name: nodesort
+Description: @PROJECT_DESCRIPTION@
+URL: @PROJECT_HOMEPAGE_URL@
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir} @NODESORT_PC_CFLAGS@
+Libs: -L${libdir} -lnodesort
+Libs.private: @NODESORT_PC_LIBS_PRIVATE@
