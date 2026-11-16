@@ -1,3 +1,9 @@
+> **Prototipo original (archivado).** Este directorio conserva el código con el que nació NodeSort:
+> las versiones v1/v2 del ordenamiento por nodos y el ordenamiento de texto. Ya no forma parte del
+> build ni recibe mantenimiento; la biblioteca actual vive en la raíz del repositorio
+> (ver el [README principal](../README.md)). Tiene fallos conocidos con entradas vacías, con todos
+> los valores iguales y con rangos que desbordan `int`.
+
 # NodeSort
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
