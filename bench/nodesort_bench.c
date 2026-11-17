@@ -48,13 +48,35 @@ static const char *const dist_names[] = {"uniform", "small-range", "few",
                                          "sorted",  "reversed",    "skewed"};
 enum { DIST_COUNT = sizeof dist_names / sizeof dist_names[0] };
 
-static void generate(uint32_t *a, size_t n, int dist, uint64_t seed) {
+enum { TYPE_U32, TYPE_I32, TYPE_F32 };
+static const char *const type_names[] = {"u32", "i32", "f32"};
+
+static uint32_t float_bits(float f) {
+    uint32_t b;
+    memcpy(&b, &f, sizeof b);
+    return b;
+}
+
+/* f32 data are real-valued (no NaNs), so the qsort reference stays exact. */
+static void generate(uint32_t *a, size_t n, int dist, int type, uint64_t seed) {
     uint64_t s = seed;
+    uint32_t range = (uint32_t)(n * 10u > UINT32_MAX ? UINT32_MAX : n * 10u);
     for (size_t i = 0; i < n; i++) {
         uint32_t r = (uint32_t)(rng_next(&s) >> 32);
+        if (type == TYPE_F32) {
+            switch (dist) {
+            case 0: a[i] = float_bits((float)(int32_t)r / 2147483648.0f); break;
+            case 1: a[i] = float_bits((float)(r % range)); break;
+            case 2: a[i] = float_bits((float)(r % 16u) * 0.25f); break;
+            case 3: a[i] = float_bits((float)i); break;
+            case 4: a[i] = float_bits((float)(n - i)); break;
+            default: a[i] = float_bits((r % 10u) ? 0.5f : (float)(int32_t)r); break;
+            }
+            continue;
+        }
         switch (dist) {
         case 0: a[i] = r; break;
-        case 1: a[i] = r % (uint32_t)(n * 10u > UINT32_MAX ? UINT32_MAX : n * 10u); break;
+        case 1: a[i] = r % range; break;
         case 2: a[i] = r % 16u; break;
         case 3: a[i] = (uint32_t)i; break;
         case 4: a[i] = (uint32_t)(n - i); break;
@@ -63,13 +85,22 @@ static void generate(uint32_t *a, size_t n, int dist, uint64_t seed) {
     }
 }
 
+static int g_descending;
+
 static int cmp_i32(const void *a, const void *b) {
     int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
-    return (x > y) - (x < y);
+    int c = (x > y) - (x < y);
+    return g_descending ? -c : c;
 }
 static int cmp_u32(const void *a, const void *b) {
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    return (x > y) - (x < y);
+    int c = (x > y) - (x < y);
+    return g_descending ? -c : c;
+}
+static int cmp_f32(const void *a, const void *b) {
+    float x = *(const float *)a, y = *(const float *)b;
+    int c = (x > y) - (x < y);
+    return g_descending ? -c : c;
 }
 
 /* ── CLI ───────────────────────────────────────────────────────────────── */
@@ -82,7 +113,8 @@ typedef struct {
     size_t ndists;
     unsigned reps;
     uint64_t seed;
-    int is_signed;
+    int type;
+    int descending;
     int csv;
 } config;
 
@@ -95,7 +127,8 @@ static void usage(FILE *out) {
                  "  --threads LIST  thread counts, 0 = auto (default 1,2,4,0)\n"
                  "  --reps N        repetitions per measurement, best is reported (default 5)\n"
                  "  --seed N        RNG seed (default 7)\n"
-                 "  --type T        i32 or u32 (default i32)\n"
+                 "  --type T        i32, u32 or f32 (default i32)\n"
+                 "  --desc          sort in descending order\n"
                  "  --csv           machine-readable output\n"
                  "  --version       print the library version\n");
 }
@@ -157,7 +190,7 @@ static int parse_args(int argc, char **argv, config *c) {
     memset(c, 0, sizeof *c);
     c->reps = 5;
     c->seed = 7;
-    c->is_signed = 1;
+    c->type = TYPE_I32;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         const char *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -170,6 +203,8 @@ static int parse_args(int argc, char **argv, config *c) {
             exit(EXIT_SUCCESS);
         } else if (strcmp(a, "--csv") == 0) {
             c->csv = 1;
+        } else if (strcmp(a, "--desc") == 0) {
+            c->descending = 1;
         } else if (!v) {
             fprintf(stderr, "nodesort_bench: missing value for %s\n", a);
             return 0;
@@ -191,9 +226,11 @@ static int parse_args(int argc, char **argv, config *c) {
             i++;
         } else if (strcmp(a, "--type") == 0) {
             if (strcmp(v, "i32") == 0)
-                c->is_signed = 1;
+                c->type = TYPE_I32;
             else if (strcmp(v, "u32") == 0)
-                c->is_signed = 0;
+                c->type = TYPE_U32;
+            else if (strcmp(v, "f32") == 0)
+                c->type = TYPE_F32;
             else
                 goto bad;
             i++;
@@ -225,8 +262,8 @@ static int parse_args(int argc, char **argv, config *c) {
 static void report(const config *c, size_t n, const char *dist, const char *impl, double ms,
                    double qsort_ms, int ok) {
     if (c->csv) {
-        printf("%zu,%s,%s,%s,%.3f,%.2f,%d\n", n, dist, c->is_signed ? "i32" : "u32", impl, ms,
-               qsort_ms / ms, ok);
+        printf("%zu,%s,%s,%s,%.3f,%.2f,%d\n", n, dist, type_names[c->type], impl, ms, qsort_ms / ms,
+               ok);
     } else {
         printf("  %-11zu %-12s %-14s %10.2f %8.2fx  %s\n", n, dist, impl, ms, qsort_ms / ms,
                ok ? "ok" : "MISMATCH");
@@ -240,13 +277,17 @@ int main(int argc, char **argv) {
     if (c.csv) {
         printf("n,dist,type,impl,best_ms,speedup_vs_qsort,correct\n");
     } else {
-        printf("nodesort %s  type=%s  reps=%u  seed=%llu\n", nodesort_version(),
-               c.is_signed ? "i32" : "u32", c.reps, (unsigned long long)c.seed);
+        printf("nodesort %s  type=%s  order=%s  reps=%u  seed=%llu\n", nodesort_version(),
+               type_names[c.type], c.descending ? "desc" : "asc", c.reps,
+               (unsigned long long)c.seed);
         printf("  %-11s %-12s %-14s %10s %9s  %s\n", "n", "dist", "impl", "best ms", "speedup",
                "check");
     }
 
-    int (*cmp)(const void *, const void *) = c.is_signed ? cmp_i32 : cmp_u32;
+    g_descending = c.descending;
+    int (*cmp)(const void *, const void *) = c.type == TYPE_F32   ? cmp_f32
+                                             : c.type == TYPE_I32 ? cmp_i32
+                                                                  : cmp_u32;
     int all_ok = 1;
 
     for (size_t si = 0; si < c.nsizes; si++) {
@@ -264,7 +305,7 @@ int main(int argc, char **argv) {
 
         for (size_t di = 0; di < c.ndists; di++) {
             int dist = c.dists[di];
-            generate(input, n, dist, c.seed);
+            generate(input, n, dist, c.type, c.seed);
 
             double qsort_ms = -1;
             for (unsigned r = 0; r < c.reps; r++) {
@@ -280,13 +321,19 @@ int main(int argc, char **argv) {
                 nodesort_options opt;
                 nodesort_options_init(&opt);
                 opt.threads = c.threads[ti];
+                opt.descending = c.descending;
                 double best = -1;
                 int ok = 1;
                 for (unsigned r = 0; r < c.reps; r++) {
                     memcpy(work, input, n * sizeof *work);
                     double t0 = now_ms();
-                    nodesort_status st = c.is_signed ? nodesort_i32((int32_t *)work, n, &opt)
-                                                     : nodesort_u32(work, n, &opt);
+                    nodesort_status st;
+                    if (c.type == TYPE_F32)
+                        st = nodesort_f32((float *)(void *)work, n, &opt);
+                    else if (c.type == TYPE_I32)
+                        st = nodesort_i32((int32_t *)work, n, &opt);
+                    else
+                        st = nodesort_u32(work, n, &opt);
                     double el = now_ms() - t0;
                     if (st != NODESORT_OK) {
                         fprintf(stderr, "nodesort_bench: %s\n", nodesort_strerror(st));
