@@ -30,9 +30,9 @@ extern "C" {
 
 /* ── Version ───────────────────────────────────────────────────────────── */
 #define NODESORT_VERSION_MAJOR 0
-#define NODESORT_VERSION_MINOR 1
+#define NODESORT_VERSION_MINOR 2
 #define NODESORT_VERSION_PATCH 0
-#define NODESORT_VERSION_STRING "0.1.0"
+#define NODESORT_VERSION_STRING "0.2.0"
 
 /* ── Status codes ──────────────────────────────────────────────────────── */
 typedef enum nodesort_status {
@@ -50,13 +50,15 @@ typedef struct nodesort_options {
     unsigned threads;
     /** Inputs smaller than this are sorted on the calling thread; 0 = default. */
     size_t seq_threshold;
+    /** Non-zero = sort in descending order. Since 0.2.0. */
+    int descending;
 } nodesort_options;
 
 /** Fill `opt` with the defaults. Always call this before changing fields. */
 NODESORT_API void nodesort_options_init(nodesort_options *opt);
 
 /**
- * Sort `data[0..n)` in ascending order, in place.
+ * Sort `data[0..n)` in place, ascending (or descending when `opt->descending` is set).
  *
  * `opt` may be NULL to use the defaults. Needs a temporary buffer of n
  * elements. On any error the array is left exactly as it was.
@@ -68,10 +70,18 @@ NODESORT_API nodesort_status nodesort_i32(int32_t *data, size_t n, const nodesor
 /** Same as nodesort_i32() for unsigned 32-bit integers. */
 NODESORT_API nodesort_status nodesort_u32(uint32_t *data, size_t n, const nodesort_options *opt);
 
+/**
+ * Same as nodesort_i32() for IEEE 754 single-precision floats. Since 0.2.0.
+ *
+ * Numeric order with -0.0 before +0.0. NaNs always go last (in ascending and in descending
+ * order) and keep their input order.
+ */
+NODESORT_API nodesort_status nodesort_f32(float *data, size_t n, const nodesort_options *opt);
+
 /** Human-readable, static description of a status code. Never returns NULL. */
 NODESORT_API const char *nodesort_strerror(nodesort_status status);
 
-/** Version of the linked library, e.g. "0.1.0". May differ from the header. */
+/** Version of the linked library, e.g. "0.2.0". May differ from the header. */
 NODESORT_API const char *nodesort_version(void);
 
 #ifdef __cplusplus

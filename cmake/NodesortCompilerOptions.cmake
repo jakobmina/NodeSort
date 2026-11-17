@@ -12,7 +12,8 @@ function(nodesort_configure_target target)
   else()
     target_compile_options(${target} PRIVATE
       -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
-      -Wstrict-prototypes -Wmissing-prototypes -Wcast-align -Wformat=2)
+      -Wstrict-prototypes -Wmissing-prototypes -Wcast-align -Wformat=2
+      -fno-strict-aliasing)
     if(NODESORT_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)
     endif()

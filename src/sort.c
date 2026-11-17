@@ -38,17 +38,17 @@ static void *ns_alloc(size_t count, size_t size) {
     return malloc(count * size);
 }
 
-static unsigned ns_digit(uint32_t x, unsigned pass, uint32_t mask) {
-    return ((x ^ mask) >> (pass * 8u)) & 0xFFu;
+static unsigned ns_digit(uint32_t x, unsigned pass, ns_keymap km) {
+    return (ns_key(x, km) >> (pass * 8u)) & 0xFFu;
 }
 
 /* ── Small inputs ──────────────────────────────────────────────────────── */
-static void insertion_sort(uint32_t *a, size_t n, uint32_t mask) {
+static void insertion_sort(uint32_t *a, size_t n, ns_keymap km) {
     for (size_t i = 1; i < n; i++) {
         uint32_t x = a[i];
-        uint32_t key = x ^ mask;
+        uint32_t key = ns_key(x, km);
         size_t j = i;
-        while (j > 0 && (a[j - 1] ^ mask) > key) {
+        while (j > 0 && ns_key(a[j - 1], km) > key) {
             a[j] = a[j - 1];
             j--;
         }
@@ -56,15 +56,15 @@ static void insertion_sort(uint32_t *a, size_t n, uint32_t mask) {
     }
 }
 
-static int is_ascending(const uint32_t *a, size_t n, uint32_t mask) {
+static int is_ascending(const uint32_t *a, size_t n, ns_keymap km) {
     for (size_t i = 1; i < n; i++)
-        if ((a[i - 1] ^ mask) > (a[i] ^ mask)) return 0;
+        if (ns_key(a[i - 1], km) > ns_key(a[i], km)) return 0;
     return 1;
 }
 
-static int is_descending(const uint32_t *a, size_t n, uint32_t mask) {
+static int is_descending(const uint32_t *a, size_t n, ns_keymap km) {
     for (size_t i = 1; i < n; i++)
-        if ((a[i - 1] ^ mask) < (a[i] ^ mask)) return 0;
+        if (ns_key(a[i - 1], km) <= ns_key(a[i], km)) return 0;
     return 1;
 }
 
@@ -77,10 +77,10 @@ static void reverse(uint32_t *a, size_t n) {
 }
 
 /* ── Shared building blocks ────────────────────────────────────────────── */
-static void histogram_all(const uint32_t *a, size_t n, uint32_t mask, ns_hist_all h) {
+static void histogram_all(const uint32_t *a, size_t n, ns_keymap km, ns_hist_all h) {
     memset(h, 0, sizeof(ns_hist_all));
     for (size_t i = 0; i < n; i++) {
-        uint32_t k = a[i] ^ mask;
+        uint32_t k = ns_key(a[i], km);
         h[0][k & 0xFFu]++;
         h[1][(k >> 8) & 0xFFu]++;
         h[2][(k >> 16) & 0xFFu]++;
@@ -96,17 +96,17 @@ static int pass_is_trivial(const size_t *total, size_t n) {
 }
 
 static void scatter(const uint32_t *src, size_t n, uint32_t *dst, size_t *offset, unsigned pass,
-                    uint32_t mask) {
+                    ns_keymap km) {
     for (size_t i = 0; i < n; i++) {
         uint32_t x = src[i];
-        dst[offset[ns_digit(x, pass, mask)]++] = x;
+        dst[offset[ns_digit(x, pass, km)]++] = x;
     }
 }
 
 /* ── Sequential radix ──────────────────────────────────────────────────── */
-static void radix_seq(uint32_t *data, uint32_t *buf, size_t n, uint32_t mask) {
+static void radix_seq(uint32_t *data, uint32_t *buf, size_t n, ns_keymap km) {
     ns_hist_all hist;
-    histogram_all(data, n, mask, hist);
+    histogram_all(data, n, km, hist);
 
     uint32_t *src = data, *dst = buf;
     for (unsigned p = 0; p < NS_PASSES; p++) {
@@ -116,7 +116,7 @@ static void radix_seq(uint32_t *data, uint32_t *buf, size_t n, uint32_t mask) {
             offset[d] = running;
             running += hist[p][d];
         }
-        scatter(src, n, dst, offset, p, mask);
+        scatter(src, n, dst, offset, p, km);
         uint32_t *tmp = src;
         src = dst;
         dst = tmp;
@@ -131,7 +131,7 @@ typedef struct ns_ctx {
     uint32_t *data;
     uint32_t *buf;
     size_t n;
-    uint32_t mask;
+    ns_keymap km;
     unsigned nthreads;
 
     ns_hist_all *hist0; /* [nthreads] histograms of each thread's initial chunk */
@@ -183,7 +183,7 @@ static void worker_run(ns_ctx *c, unsigned id) {
     chunk_bounds(c->n, c->nthreads, id, &begin, &end);
     size_t len = end - begin;
 
-    histogram_all(c->data + begin, len, c->mask, c->hist0[id]);
+    histogram_all(c->data + begin, len, c->km, c->hist0[id]);
     ns_barrier_wait(&c->barrier);
     if (id == 0) plan_passes(c);
     ns_barrier_wait(&c->barrier);
@@ -196,7 +196,7 @@ static void worker_run(ns_ctx *c, unsigned id) {
             memcpy(count, c->hist0[id][p], sizeof(ns_hist));
         } else {
             memset(count, 0, sizeof(ns_hist));
-            for (size_t i = begin; i < end; i++) count[ns_digit(src[i], p, c->mask)]++;
+            for (size_t i = begin; i < end; i++) count[ns_digit(src[i], p, c->km)]++;
         }
         ns_barrier_wait(&c->barrier);
         if (id == 0) compute_offsets(c);
@@ -204,7 +204,7 @@ static void worker_run(ns_ctx *c, unsigned id) {
 
         size_t offset[NS_BUCKETS];
         memcpy(offset, c->offset[id], sizeof offset);
-        scatter(src + begin, len, dst, offset, p, c->mask);
+        scatter(src + begin, len, dst, offset, p, c->km);
         ns_barrier_wait(&c->barrier);
 
         uint32_t *tmp = src;
@@ -232,7 +232,7 @@ static void open_gate(ns_ctx *c, int state) {
 }
 
 /* Every resource is acquired before the first element moves, so any failure leaves data intact. */
-static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, uint32_t mask,
+static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, ns_keymap km,
                                  unsigned nthreads) {
     nodesort_status status = NODESORT_OK;
     ns_ctx c;
@@ -240,7 +240,7 @@ static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, uint32
     c.data = data;
     c.buf = buf;
     c.n = n;
-    c.mask = mask;
+    c.km = km;
     c.nthreads = nthreads;
     c.gate = GATE_PENDING;
 
@@ -296,15 +296,15 @@ free_memory:
 }
 
 /* ── Entry point ───────────────────────────────────────────────────────── */
-nodesort_status ns_sort_u32(uint32_t *data, size_t n, uint32_t sign_mask, unsigned threads,
+nodesort_status ns_sort_u32(uint32_t *data, size_t n, ns_keymap km, unsigned threads,
                             size_t seq_threshold) {
     if (n < 2) return NODESORT_OK;
     if (n <= NS_INSERTION_MAX) {
-        insertion_sort(data, n, sign_mask);
+        insertion_sort(data, n, km);
         return NODESORT_OK;
     }
-    if (is_ascending(data, n, sign_mask)) return NODESORT_OK;
-    if (is_descending(data, n, sign_mask)) {
+    if (is_ascending(data, n, km)) return NODESORT_OK;
+    if (is_descending(data, n, km)) {
         reverse(data, n);
         return NODESORT_OK;
     }
@@ -320,9 +320,9 @@ nodesort_status ns_sort_u32(uint32_t *data, size_t n, uint32_t sign_mask, unsign
 
     nodesort_status status = NODESORT_OK;
     if (nthreads == 1)
-        radix_seq(data, buf, n, sign_mask);
+        radix_seq(data, buf, n, km);
     else
-        status = radix_par(data, buf, n, sign_mask, (unsigned)nthreads);
+        status = radix_par(data, buf, n, km, (unsigned)nthreads);
 
     free(buf);
     return status;
