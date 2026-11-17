@@ -162,4 +162,4 @@ jobs:
           -DNODESORT_BUILD_FUZZ=ON -DNODESORT_BUILD_TESTS=OFF -DNODESORT_BUILD_BENCH=OFF
           -DNODESORT_BUILD_EXAMPLES=OFF -DNODESORT_INSTALL=OFF
       - run: cmake --build build --target fuzz_nodesort
-      - run: ./build/fuzz/fuzz_nodesort -max_total_time=60 -max_len=65536
+      - run: ./build/fuzz/fuzz_nodesort -max_total_time=60 -max_len=300000

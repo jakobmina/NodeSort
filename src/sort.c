@@ -192,7 +192,7 @@ free_memory:
 }
 
 /* ── Instantiations ────────────────────────────────────────────────────── */
-/* Integers need only an XOR; the float map costs ~15-20% if applied to them too. */
+/* One engine per key kind; see architecture.md (Keys are computed on the fly). */
 #define NS_FN(name) name##_int
 #define NS_KEY(x, km) ((x) ^ (km).xor_mask)
 #include "radix_impl.h"

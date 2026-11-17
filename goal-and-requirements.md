@@ -7,7 +7,8 @@ status: active
 
 # nodesort
 
-Biblioteca C portable para ordenar arrays de enteros de 32 bits en paralelo, más rápido que `qsort`.
+Biblioteca C portable para ordenar en paralelo arrays numéricos (enteros y flotantes de 32 bits),
+más rápido que `qsort`.
 
 ## Overview
 
@@ -40,6 +41,8 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 - Cuando tengo un array grande de `int32_t`/`uint32_t`, quiero ordenarlo con una sola llamada que use
   todos los núcleos, para no escribir ni mantener mi propio sort paralelo.
+- Cuando tengo puntuaciones `float` (p. ej. similitudes de embeddings), quiero ordenarlas — también
+  de mayor a menor — sin que un NaN aparezca entre las primeras posiciones.
 - Cuando integro una dependencia, quiero que se instale y enlace con las herramientas estándar en
   cualquier SO, para no parchear su build.
 
@@ -47,6 +50,8 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 - Resultado idéntico a `qsort` para toda entrada, incluidos casos límite (vacío, un elemento, todos
   iguales, `INT32_MIN`/`INT32_MAX`, datos sesgados).
+- `float`: orden numérico con `-0.0` antes que `+0.0`; los NaN siempre al final, en ascendente y en
+  descendente, en su orden de entrada.
 - Más rápido que `qsort` en arrays grandes (≥ 1M elementos) en máquinas multinúcleo.
 - Nunca aborta ni corrompe memoria: todo fallo (memoria, hilos, argumentos) vuelve como código de
   error y deja el array exactamente como estaba.
@@ -56,9 +61,7 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 ## Non-Goals
 
-- Tipos distintos de enteros de 32 bits (64 bits, flotantes, comparador genérico) — decidido fuera
-  del primer build.
-- Ordenación estable: para enteros es indistinguible.
+- Comparador genérico definido por el usuario.
 - Mantener las variantes v1/v2 del prototipo.
 
 ## Success Conditions
@@ -71,9 +74,11 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 ## Capabilities
 
-- **Ordenación en el sitio** de `int32_t` y `uint32_t`, paralela, con número de hilos automático
-  (núcleos disponibles) o fijado por el usuario.
-- **Opciones** de hilos y umbral bajo el cual se ordena en secuencial (entradas pequeñas).
+- **Ordenación en el sitio** de `int32_t`, `uint32_t` y `float`, paralela, con número de hilos
+  automático (núcleos disponibles) o fijado por el usuario.
+- **Orden ascendente o descendente**, a elección del usuario, para todos los tipos.
+- **Opciones** de hilos, dirección y umbral bajo el cual se ordena en secuencial (entradas
+  pequeñas); un binario compilado con una versión anterior de la cabecera sigue funcionando.
 - **Errores explícitos** por código de retorno, con texto legible.
 - **Benchmark CLI** reproducible (tamaño, distribución, hilos, repeticiones, salida CSV) que compara
   contra `qsort`.

@@ -3,7 +3,7 @@
 [![CI](https://github.com/jakobmina/NodeSort/actions/workflows/ci.yml/badge.svg)](https://github.com/jakobmina/NodeSort/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Parallel, in-place sorting of 32-bit integer arrays for C.** One call, every core, no
+**Parallel, in-place sorting of 32-bit integer and float arrays for C.** One call, every core, no
 dependencies — typically 10–20× faster than `qsort` on large arrays.
 
 ```c
@@ -26,6 +26,7 @@ if (st != NODESORT_OK) fprintf(stderr, "%s\n", nodesort_strerror(st));
 ```c
 nodesort_status nodesort_i32(int32_t  *data, size_t n, const nodesort_options *opt);
 nodesort_status nodesort_u32(uint32_t *data, size_t n, const nodesort_options *opt);
+nodesort_status nodesort_f32(float    *data, size_t n, const nodesort_options *opt);
 
 void        nodesort_options_init(nodesort_options *opt);
 const char *nodesort_strerror(nodesort_status status);
@@ -46,7 +47,22 @@ nodesort_options opt;
 nodesort_options_init(&opt);
 opt.threads = 4;               /* 0 = all available cores (affinity-aware on Linux) */
 opt.seq_threshold = 1 << 16;   /* below this many elements, sort on the calling thread */
+opt.descending = 1;            /* largest first (since 0.2.0) */
 nodesort_i32(data, n, &opt);
+```
+
+### Floats
+
+`nodesort_f32` sorts by numeric value, with `-0.0` before `+0.0`. **NaNs always go last** — in
+ascending *and* descending order — and keep their input order, so a top-k of similarity scores
+never starts with a NaN:
+
+```c
+float scores[] = {0.12f, NAN, 0.98f, -0.40f};
+nodesort_options opt;
+nodesort_options_init(&opt);
+opt.descending = 1;
+nodesort_f32(scores, 4, &opt);   /* 0.98, 0.12, -0.40, NaN */
 ```
 
 Memory: a temporary buffer of `n` elements is allocated per call. Threads are created per call
@@ -54,7 +70,7 @@ Memory: a temporary buffer of `n` elements is allocated per call. Threads are cr
 
 ## Performance
 
-`nodesort_bench --dist all --n 1000000,10000000 --reps 3` on a 4-core laptop (gcc 13, `-O3`):
+`nodesort_bench --dist all --n 1000000,10000000 --reps 3` (and `--type f32`) on a 4-core laptop (gcc 13, `-O3`):
 
 | n | distribution | qsort | nodesort (1 thread) | nodesort (4 threads) |
 |---|---|---:|---:|---:|
@@ -63,6 +79,7 @@ Memory: a temporary buffer of `n` elements is allocated per call. Threads are cr
 | 10M | few distinct | 1345 ms | 121 ms | 73 ms (18×) |
 | 10M | skewed | 1447 ms | 199 ms | 148 ms (10×) |
 | 10M | sorted | 721 ms | 14 ms | 15 ms (47×) |
+| 10M | uniform `float` | 2558 ms | 199 ms | 157 ms (16×) |
 
 Run it on your own hardware — results are verified against `qsort` on every run:
 
@@ -97,7 +114,7 @@ Packages: `cd build && cpack` produces `.tar.gz`, `.deb` and (with `rpmbuild`) `
 **CMake** (installed):
 
 ```cmake
-find_package(nodesort 0.1 REQUIRED)
+find_package(nodesort 0.2 REQUIRED)
 target_link_libraries(app PRIVATE nodesort::nodesort)
 ```
 
