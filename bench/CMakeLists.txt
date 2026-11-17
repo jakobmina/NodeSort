@@ -10,4 +10,6 @@ endif()
 if(NODESORT_BUILD_TESTS)
   add_test(NAME bench_smoke
     COMMAND nodesort_bench --n 1000,200000 --dist all --threads 1,3,0 --reps 1 --csv)
+  add_test(NAME bench_smoke_f32_desc
+    COMMAND nodesort_bench --n 1000,200000 --dist all --threads 1,3,0 --reps 1 --csv --type f32 --desc)
 endif()

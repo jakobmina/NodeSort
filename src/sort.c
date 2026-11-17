@@ -38,36 +38,6 @@ static void *ns_alloc(size_t count, size_t size) {
     return malloc(count * size);
 }
 
-static unsigned ns_digit(uint32_t x, unsigned pass, uint32_t mask) {
-    return ((x ^ mask) >> (pass * 8u)) & 0xFFu;
-}
-
-/* ── Small inputs ──────────────────────────────────────────────────────── */
-static void insertion_sort(uint32_t *a, size_t n, uint32_t mask) {
-    for (size_t i = 1; i < n; i++) {
-        uint32_t x = a[i];
-        uint32_t key = x ^ mask;
-        size_t j = i;
-        while (j > 0 && (a[j - 1] ^ mask) > key) {
-            a[j] = a[j - 1];
-            j--;
-        }
-        a[j] = x;
-    }
-}
-
-static int is_ascending(const uint32_t *a, size_t n, uint32_t mask) {
-    for (size_t i = 1; i < n; i++)
-        if ((a[i - 1] ^ mask) > (a[i] ^ mask)) return 0;
-    return 1;
-}
-
-static int is_descending(const uint32_t *a, size_t n, uint32_t mask) {
-    for (size_t i = 1; i < n; i++)
-        if ((a[i - 1] ^ mask) < (a[i] ^ mask)) return 0;
-    return 1;
-}
-
 static void reverse(uint32_t *a, size_t n) {
     for (size_t i = 0, j = n - 1; i < j; i++, j--) {
         uint32_t t = a[i];
@@ -77,51 +47,11 @@ static void reverse(uint32_t *a, size_t n) {
 }
 
 /* ── Shared building blocks ────────────────────────────────────────────── */
-static void histogram_all(const uint32_t *a, size_t n, uint32_t mask, ns_hist_all h) {
-    memset(h, 0, sizeof(ns_hist_all));
-    for (size_t i = 0; i < n; i++) {
-        uint32_t k = a[i] ^ mask;
-        h[0][k & 0xFFu]++;
-        h[1][(k >> 8) & 0xFFu]++;
-        h[2][(k >> 16) & 0xFFu]++;
-        h[3][k >> 24]++;
-    }
-}
-
 /* A pass is a no-op when every key has the same digit in it. */
 static int pass_is_trivial(const size_t *total, size_t n) {
     for (unsigned d = 0; d < NS_BUCKETS; d++)
         if (total[d] != 0) return total[d] == n;
     return 1;
-}
-
-static void scatter(const uint32_t *src, size_t n, uint32_t *dst, size_t *offset, unsigned pass,
-                    uint32_t mask) {
-    for (size_t i = 0; i < n; i++) {
-        uint32_t x = src[i];
-        dst[offset[ns_digit(x, pass, mask)]++] = x;
-    }
-}
-
-/* ── Sequential radix ──────────────────────────────────────────────────── */
-static void radix_seq(uint32_t *data, uint32_t *buf, size_t n, uint32_t mask) {
-    ns_hist_all hist;
-    histogram_all(data, n, mask, hist);
-
-    uint32_t *src = data, *dst = buf;
-    for (unsigned p = 0; p < NS_PASSES; p++) {
-        if (pass_is_trivial(hist[p], n)) continue;
-        size_t offset[NS_BUCKETS], running = 0;
-        for (unsigned d = 0; d < NS_BUCKETS; d++) {
-            offset[d] = running;
-            running += hist[p][d];
-        }
-        scatter(src, n, dst, offset, p, mask);
-        uint32_t *tmp = src;
-        src = dst;
-        dst = tmp;
-    }
-    if (src != data) memcpy(data, src, n * sizeof *data);
 }
 
 /* ── Parallel radix ────────────────────────────────────────────────────── */
@@ -131,8 +61,9 @@ typedef struct ns_ctx {
     uint32_t *data;
     uint32_t *buf;
     size_t n;
-    uint32_t mask;
+    ns_keymap km;
     unsigned nthreads;
+    void (*run)(struct ns_ctx *c, unsigned id); /* worker body for this key kind */
 
     ns_hist_all *hist0; /* [nthreads] histograms of each thread's initial chunk */
     ns_hist *count;     /* [nthreads] digit counts of the current pass          */
@@ -178,42 +109,6 @@ static void compute_offsets(ns_ctx *c) {
         }
 }
 
-static void worker_run(ns_ctx *c, unsigned id) {
-    size_t begin, end;
-    chunk_bounds(c->n, c->nthreads, id, &begin, &end);
-    size_t len = end - begin;
-
-    histogram_all(c->data + begin, len, c->mask, c->hist0[id]);
-    ns_barrier_wait(&c->barrier);
-    if (id == 0) plan_passes(c);
-    ns_barrier_wait(&c->barrier);
-
-    uint32_t *src = c->data, *dst = c->buf;
-    for (unsigned k = 0; k < c->nactive; k++) {
-        unsigned p = c->active[k];
-        size_t *count = c->count[id];
-        if (k == 0) {
-            memcpy(count, c->hist0[id][p], sizeof(ns_hist));
-        } else {
-            memset(count, 0, sizeof(ns_hist));
-            for (size_t i = begin; i < end; i++) count[ns_digit(src[i], p, c->mask)]++;
-        }
-        ns_barrier_wait(&c->barrier);
-        if (id == 0) compute_offsets(c);
-        ns_barrier_wait(&c->barrier);
-
-        size_t offset[NS_BUCKETS];
-        memcpy(offset, c->offset[id], sizeof offset);
-        scatter(src + begin, len, dst, offset, p, c->mask);
-        ns_barrier_wait(&c->barrier);
-
-        uint32_t *tmp = src;
-        src = dst;
-        dst = tmp;
-    }
-    if (src != c->data) memcpy(c->data + begin, src + begin, len * sizeof *src);
-}
-
 static void worker_main(void *arg) {
     ns_worker *w = (ns_worker *)arg;
     ns_ctx *c = w->ctx;
@@ -221,7 +116,7 @@ static void worker_main(void *arg) {
     while (c->gate == GATE_PENDING) ns_cond_wait(&c->gate_cond, &c->gate_mutex);
     int go = c->gate == GATE_GO;
     ns_mutex_unlock(&c->gate_mutex);
-    if (go) worker_run(c, w->id);
+    if (go) c->run(c, w->id);
 }
 
 static void open_gate(ns_ctx *c, int state) {
@@ -232,16 +127,17 @@ static void open_gate(ns_ctx *c, int state) {
 }
 
 /* Every resource is acquired before the first element moves, so any failure leaves data intact. */
-static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, uint32_t mask,
-                                 unsigned nthreads) {
+static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, ns_keymap km,
+                                 unsigned nthreads, void (*run)(ns_ctx *, unsigned)) {
     nodesort_status status = NODESORT_OK;
     ns_ctx c;
     memset(&c, 0, sizeof c);
     c.data = data;
     c.buf = buf;
     c.n = n;
-    c.mask = mask;
+    c.km = km;
     c.nthreads = nthreads;
+    c.run = run;
     c.gate = GATE_PENDING;
 
     ns_worker *workers = (ns_worker *)ns_alloc(nthreads, sizeof *workers);
@@ -278,7 +174,7 @@ static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, uint32
         status = NODESORT_ETHREAD;
     } else {
         open_gate(&c, GATE_GO);
-        worker_run(&c, 0);
+        run(&c, 0);
     }
     for (unsigned t = 1; t < started; t++) ns_thread_join(&workers[t].thread);
 
@@ -295,35 +191,24 @@ free_memory:
     return status;
 }
 
+/* ── Instantiations ────────────────────────────────────────────────────── */
+/* One engine per key kind; see architecture.md (Keys are computed on the fly). */
+#define NS_FN(name) name##_int
+#define NS_KEY(x, km) ((x) ^ (km).xor_mask)
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+
+#define NS_FN(name) name##_flt
+#define NS_KEY(x, km) ns_key((x), (km))
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+
 /* ── Entry point ───────────────────────────────────────────────────────── */
-nodesort_status ns_sort_u32(uint32_t *data, size_t n, uint32_t sign_mask, unsigned threads,
+nodesort_status ns_sort_u32(uint32_t *data, size_t n, ns_keymap km, unsigned threads,
                             size_t seq_threshold) {
-    if (n < 2) return NODESORT_OK;
-    if (n <= NS_INSERTION_MAX) {
-        insertion_sort(data, n, sign_mask);
-        return NODESORT_OK;
-    }
-    if (is_ascending(data, n, sign_mask)) return NODESORT_OK;
-    if (is_descending(data, n, sign_mask)) {
-        reverse(data, n);
-        return NODESORT_OK;
-    }
-
-    size_t max_by_size = n / NS_MIN_PER_THREAD;
-    size_t nthreads = threads;
-    if (nthreads > NS_MAX_THREADS) nthreads = NS_MAX_THREADS;
-    if (nthreads > max_by_size) nthreads = max_by_size;
-    if (nthreads < 1 || n < seq_threshold) nthreads = 1;
-
-    uint32_t *buf = (uint32_t *)ns_alloc(n, sizeof *buf);
-    if (!buf) return NODESORT_ENOMEM;
-
-    nodesort_status status = NODESORT_OK;
-    if (nthreads == 1)
-        radix_seq(data, buf, n, sign_mask);
-    else
-        status = radix_par(data, buf, n, sign_mask, (unsigned)nthreads);
-
-    free(buf);
-    return status;
+    if (km.float_mask != 0 || km.nan_mask != 0)
+        return sort_flt(data, n, km, threads, seq_threshold);
+    return sort_int(data, n, km, threads, seq_threshold);
 }

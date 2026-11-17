@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+- `nodesort_f32`: IEEE 754 floats in numeric order, `-0.0` before `+0.0`, NaNs always last (in both
+  directions) and in their input order.
+- `nodesort_options.descending`: descending order for every element type.
+- `nodesort_bench --type f32` and `--desc`.
+
+### Changed
+- The "already in reverse order" fast path only fires on strictly descending input, so elements with
+  equal keys are never reordered.
+- The library is built with `-fno-strict-aliasing` (floats are accessed as 32-bit words).
+
+### Compatibility
+- `nodesort_options` grew a field at the end. Binaries built against the 0.1 header keep working: the
+  library reads `descending` only when `struct_size` covers it. The SONAME moves to `0.2`, so they
+  must be relinked or keep `libnodesort.so.0.1` installed.
+
 ## [0.1.0]
 
 ### Added
