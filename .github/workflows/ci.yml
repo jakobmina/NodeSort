@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Linux GCC static",   os: ubuntu-latest,  cc: gcc,   shared: OFF }
+          - { name: "Linux Clang shared", os: ubuntu-latest,  cc: clang, shared: ON }
+          - { name: "macOS Clang",        os: macos-latest,   cc: clang, shared: ON }
+          - { name: "Windows MSVC static", os: windows-latest, cc: "",   shared: OFF }
+          - { name: "Windows MSVC shared", os: windows-latest, cc: "",   shared: ON }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        shell: bash
+        run: >
+          cmake -S . -B build
+          ${{ matrix.cc && format('-DCMAKE_C_COMPILER={0}', matrix.cc) || '' }}
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_SHARED_LIBS=${{ matrix.shared }}
+          -DNODESORT_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  mingw:
+    name: Windows MinGW (UCRT64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNODESORT_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: Sanitizer (${{ matrix.sanitize }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitize: ["address,undefined", "thread"]
+    steps:
+      - uses: actions/checkout@v4
+      # ThreadSanitizer cannot start with the high ASLR entropy of recent kernels.
+      - name: Lower ASLR entropy
+        if: matrix.sanitize == 'thread'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DNODESORT_SANITIZE=${{ matrix.sanitize }}
+          -DNODESORT_WARNINGS_AS_ERRORS=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          TSAN_OPTIONS: halt_on_error=1
+
+  install-consumer:
+    name: Install + consume (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and install nodesort
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+                -DNODESORT_BUILD_TESTS=OFF -DNODESORT_BUILD_BENCH=OFF -DNODESORT_BUILD_EXAMPLES=OFF \
+                -DCMAKE_INSTALL_PREFIX="$PWD/prefix"
+          cmake --build build --config Release
+          cmake --install build --config Release
+      - name: Consume with find_package
+        shell: bash
+        run: |
+          cmake -S tests/consumer -B consumer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PWD/prefix"
+          cmake --build consumer --config Release
+          if [ "$RUNNER_OS" = "Windows" ]; then export PATH="$PWD/prefix/bin:$PATH"; fi
+          ctest --test-dir consumer -C Release --output-on-failure
+      - name: Consume with pkg-config
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew list pkg-config >/dev/null 2>&1 || brew install pkg-config; fi
+          export PKG_CONFIG_PATH="$(find "$PWD/prefix" -type d -name pkgconfig | head -1)"
+          cc tests/consumer/main.c $(pkg-config --cflags --libs nodesort) -Wl,-rpath,"$(pkg-config --variable=libdir nodesort)" -o consumer-pc
+          ./consumer-pc
+
+  packages:
+    name: Linux packages (.deb/.rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y rpm
+      - run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+                -DNODESORT_BUILD_TESTS=OFF -DNODESORT_BUILD_BENCH=OFF -DNODESORT_BUILD_EXAMPLES=OFF \
+                -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          cd build && cpack
+      - name: Install the .deb and smoke-test it
+        run: |
+          sudo apt-get install -y ./build/*.deb
+          cc tests/consumer/main.c $(pkg-config --cflags --libs nodesort) -o consumer-deb
+          ./consumer-deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            build/*.deb
+            build/*.rpm
+            build/*.tar.gz
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git ls-files '*.c' '*.h' ':!:legacy/*' | xargs clang-format --dry-run --Werror
+
+  fuzz:
+    name: Fuzz (60 s)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DNODESORT_BUILD_FUZZ=ON -DNODESORT_BUILD_TESTS=OFF -DNODESORT_BUILD_BENCH=OFF
+          -DNODESORT_BUILD_EXAMPLES=OFF -DNODESORT_INSTALL=OFF
+      - run: cmake --build build --target fuzz_nodesort
+      - run: ./build/fuzz/fuzz_nodesort -max_total_time=60 -max_len=65536
