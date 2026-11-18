@@ -1,5 +1,6 @@
 /*
- * nodesort - parallel in-place sorting of 32-bit integer arrays.
+ * nodesort - parallel in-place sorting of integer and floating-point arrays, with optional
+ * carried values.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -30,9 +31,9 @@ extern "C" {
 
 /* ── Version ───────────────────────────────────────────────────────────── */
 #define NODESORT_VERSION_MAJOR 0
-#define NODESORT_VERSION_MINOR 2
+#define NODESORT_VERSION_MINOR 3
 #define NODESORT_VERSION_PATCH 0
-#define NODESORT_VERSION_STRING "0.2.0"
+#define NODESORT_VERSION_STRING "0.3.0"
 
 /* ── Status codes ──────────────────────────────────────────────────────── */
 typedef enum nodesort_status {
@@ -78,10 +79,33 @@ NODESORT_API nodesort_status nodesort_u32(uint32_t *data, size_t n, const nodeso
  */
 NODESORT_API nodesort_status nodesort_f32(float *data, size_t n, const nodesort_options *opt);
 
+/** Same as nodesort_f32() for IEEE 754 double-precision floats. Since 0.3.0. */
+NODESORT_API nodesort_status nodesort_f64(double *data, size_t n, const nodesort_options *opt);
+
+/**
+ * Key-value sort. Since 0.3.0.
+ *
+ * Sorts `keys[0..n)` like the matching single-array function and applies the same permutation to
+ * `values`, a parallel array of `n` elements of `value_size` bytes (4 or 8: uint32_t, int32_t,
+ * float, uint64_t, double, pointers...). `values` must be aligned to `value_size`.
+ *
+ * Stable: values whose keys are equal keep their input order, in both directions.
+ * Needs temporary buffers of n keys and n values. On any error both arrays are left exactly as
+ * they were; NODESORT_EINVAL also covers a bad value_size, NULL or misaligned values.
+ */
+NODESORT_API nodesort_status nodesort_kv_u32(uint32_t *keys, void *values, size_t value_size,
+                                             size_t n, const nodesort_options *opt);
+/** Key-value sort with float keys (same order rules as nodesort_f32()). Since 0.3.0. */
+NODESORT_API nodesort_status nodesort_kv_f32(float *keys, void *values, size_t value_size, size_t n,
+                                             const nodesort_options *opt);
+/** Key-value sort with 64-bit unsigned keys. Since 0.3.0. */
+NODESORT_API nodesort_status nodesort_kv_u64(uint64_t *keys, void *values, size_t value_size,
+                                             size_t n, const nodesort_options *opt);
+
 /** Human-readable, static description of a status code. Never returns NULL. */
 NODESORT_API const char *nodesort_strerror(nodesort_status status);
 
-/** Version of the linked library, e.g. "0.2.0". May differ from the header. */
+/** Version of the linked library, e.g. "0.3.0". May differ from the header. */
 NODESORT_API const char *nodesort_version(void);
 
 #ifdef __cplusplus
