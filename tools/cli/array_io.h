@@ -20,7 +20,9 @@ typedef struct {
 
 #define ERR_LEN 256
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__MINGW32__) /* plain `printf` means the MS rules there, which lack %zu */
+#  define CLI_PRINTF(fmt_index, first_arg) __attribute__((format(gnu_printf, fmt_index, first_arg)))
+#elif defined(__GNUC__) || defined(__clang__)
 #  define CLI_PRINTF(fmt_index, first_arg) __attribute__((format(printf, fmt_index, first_arg)))
 #else
 #  define CLI_PRINTF(fmt_index, first_arg)
