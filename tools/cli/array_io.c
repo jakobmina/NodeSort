@@ -21,7 +21,7 @@
 #  define ns_ftell ftello
 #endif
 
-static int fail(char *err, const char *fmt, ...) {
+CLI_PRINTF(2, 3) static int fail(char *err, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(err, ERR_LEN, fmt, ap);
@@ -73,7 +73,8 @@ int dtype_parse(const char *s, dtype *out) {
     static const struct {
         const char *name;
         dtype t;
-    } names[] = {{"f32", DT_F32}, {"f64", DT_F64}, {"i32", DT_I32}, {"u32", DT_U32}, {"u64", DT_U64}};
+    } names[] = {
+        {"f32", DT_F32}, {"f64", DT_F64}, {"i32", DT_I32}, {"u32", DT_U32}, {"u64", DT_U64}};
     for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
         if (strcmp(s, names[i].name) == 0) {
             *out = names[i].t;
@@ -103,6 +104,18 @@ int dtype_from_extension(const char *path, dtype *out) {
     for (size_t i = 0; i < sizeof exts / sizeof exts[0]; i++)
         if (ext_equals(path, exts[i])) return dtype_parse(exts[i], out);
     return 0;
+}
+
+array_t array_view(dtype type, size_t rows, size_t cols, void *data, int from_npy) {
+    array_t a;
+    a.type = type;
+    a.ndim = cols ? 2 : 1;
+    a.rows = rows;
+    a.cols = cols ? cols : 1;
+    a.count = rows * a.cols;
+    a.data = data;
+    a.from_npy = from_npy;
+    return a;
 }
 
 void array_free(array_t *a) {
@@ -166,8 +179,8 @@ static int parse_npy_header(const char *hdr, const char *path, array_t *a, char 
         if (strcmp(d, dtype_descr(all[i])) == 0) a->type = all[i];
     if (a->type == DT_NONE) {
         if (d[0] == '>')
-            return fail(err, "%s: big-endian dtype '%s' not supported (use arr.astype('<%s'))", path,
-                        d, d + 1);
+            return fail(err, "%s: big-endian dtype '%s' not supported (use arr.astype('<%s'))",
+                        path, d, d + 1);
         return fail(err, "%s: dtype '%s' not supported (use float32, float64, int32 or uint32)",
                     path, d);
     }
@@ -184,7 +197,8 @@ static int parse_npy_header(const char *hdr, const char *path, array_t *a, char 
         if (!isdigit((unsigned char)*p)) return fail(err, "%s: malformed .npy shape", path);
         char *stop;
         unsigned long long v = strtoull(p, &stop, 10);
-        if (ndim == 3) return fail(err, "%s: arrays with more than 2 dimensions not supported", path);
+        if (ndim == 3)
+            return fail(err, "%s: arrays with more than 2 dimensions not supported", path);
         dims[ndim++] = (size_t)v;
         p = stop;
     }
@@ -197,8 +211,7 @@ static int parse_npy_header(const char *hdr, const char *path, array_t *a, char 
     if (ndim == 2 && fortran_order && a->rows > 1 && a->cols > 1)
         return fail(err, "%s: Fortran-ordered matrix not supported (use np.ascontiguousarray)",
                     path);
-    if (a->cols != 0 && a->rows > SIZE_MAX / a->cols)
-        return fail(err, "%s: array too large", path);
+    if (a->cols != 0 && a->rows > SIZE_MAX / a->cols) return fail(err, "%s: array too large", path);
     a->count = a->rows * a->cols;
     return 0;
 }
@@ -241,8 +254,8 @@ static int read_npy(FILE *f, const char *path, uint64_t fsize, array_t *a, char 
 static int read_raw(FILE *f, const char *path, uint64_t fsize, dtype type, size_t cols, array_t *a,
                     char *err) {
     if (type == DT_NONE && !dtype_from_extension(path, &type))
-        return fail(err,
-                    "%s: unknown raw type; use a .f32/.f64/.i32/.u32 extension or --type", path);
+        return fail(err, "%s: unknown raw type; use a .f32/.f64/.i32/.u32 extension or --type",
+                    path);
     size_t esize = dtype_size(type);
     if (fsize % esize != 0)
         return fail(err, "%s: size %llu is not a multiple of %zu bytes (%s)", path,
@@ -292,7 +305,15 @@ static int write_npy_header(FILE *f, const char *descr, const char *shape) {
     size_t total = 10 + (size_t)len + 1; /* prefix + dict + '\n' */
     size_t pad = (64 - total % 64) % 64;
     size_t hlen = (size_t)len + pad + 1;
-    unsigned char pre[10] = {0x93, 'N', 'U', 'M', 'P', 'Y', 1, 0, (unsigned char)(hlen & 0xFF),
+    unsigned char pre[10] = {0x93,
+                             'N',
+                             'U',
+                             'M',
+                             'P',
+                             'Y',
+                             1,
+                             0,
+                             (unsigned char)(hlen & 0xFF),
                              (unsigned char)(hlen >> 8)};
     if (fwrite(pre, 1, 10, f) != 10 || fwrite(dict, 1, (size_t)len, f) != (size_t)len) return 0;
     for (size_t i = 0; i < pad; i++)

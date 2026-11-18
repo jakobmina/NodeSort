@@ -10,15 +10,24 @@ typedef enum { DT_NONE, DT_F32, DT_F64, DT_I32, DT_U32, DT_U64 } dtype;
 
 typedef struct {
     dtype type;
-    size_t ndim;     /* 1 or 2 */
-    size_t rows;     /* shape[0] */
-    size_t cols;     /* shape[1]; 1 for 1-D arrays */
-    size_t count;    /* rows * cols */
-    void *data;      /* malloc'd, `count` elements of `type` */
-    int from_npy;    /* 1 = read from .npy, 0 = raw */
+    size_t ndim;  /* 1 or 2 */
+    size_t rows;  /* shape[0] */
+    size_t cols;  /* shape[1]; 1 for 1-D arrays */
+    size_t count; /* rows * cols */
+    void *data;   /* malloc'd, `count` elements of `type` */
+    int from_npy; /* 1 = read from .npy, 0 = raw */
 } array_t;
 
 #define ERR_LEN 256
+
+#if defined(__GNUC__) || defined(__clang__)
+#  define CLI_PRINTF(fmt_index, first_arg) __attribute__((format(printf, fmt_index, first_arg)))
+#else
+#  define CLI_PRINTF(fmt_index, first_arg)
+#endif
+
+/* Builds a 1-D (cols == 0) or 2-D array descriptor around existing data. */
+array_t array_view(dtype type, size_t rows, size_t cols, void *data, int from_npy);
 
 size_t dtype_size(dtype t);
 const char *dtype_name(dtype t); /* "float32", "uint64", ... */
