@@ -35,3 +35,7 @@ if(WIN32 AND BUILD_SHARED_LIBS)
   add_custom_command(TARGET test_kv POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:nodesort> $<TARGET_FILE_DIR:test_kv>)
 endif()
+
+if(TARGET nodesort_cli)
+  add_subdirectory(cli)
+endif()

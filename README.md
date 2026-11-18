@@ -23,6 +23,70 @@ if (st != NODESORT_OK) fprintf(stderr, "%s\n", nodesort_strerror(st));
   code and **leaves the array exactly as it was**.
 - **Portable** — C11 on Linux, macOS and Windows (MSVC and MinGW); POSIX threads or Win32.
 - **Easy to consume** — CMake `find_package`, `pkg-config`, `.deb`/`.rpm`, static or shared.
+- **Command-line tool** — sort NumPy `.npy` / raw binary files, find the top-k most similar
+  embeddings, or watch a live race against `qsort`, without writing any C.
+
+## Command-line tool
+
+The packages install a `nodesort` command (`tools/cli`; build option `NODESORT_BUILD_CLI`).
+
+```console
+$ nodesort demo                       # live race on random data, 1K → 10M elements
+       elements         qsort      nodesort   speedup  check
+          1,000       0.65 ms       0.06 ms     11.6x  ok
+            ...
+     10,000,000    4701.88 ms     273.97 ms     17.2x  ok
+
+$ nodesort sort scores.npy --desc -o scores_sorted.npy
+sorted 2,000,000 float32 values in 90.78 ms (descending, up to 4 threads)
+wrote scores_sorted.npy
+
+$ nodesort top embeddings.npy --query q.npy -k 5 -o top.npy
+top 5 of 200,000 rows (384 dims), metric cosine: scored in 218.45 ms, ranked in 15.88 ms
+
+    rank                    id         score
+       1                    42      0.995026
+       2                136913      0.209383
+       ...
+```
+
+| Command | What it does |
+|---|---|
+| `nodesort sort INPUT [-o OUT] [--desc]` | Sorts a 1-D array. Without `-o` it only prints a summary; `-o` may be the input file itself. |
+| `nodesort top MATRIX --query Q [-k K] [--metric cosine\|dot\|l2] [--ids IDS] [-o OUT.npy]` | Ranks the rows of an N×D embedding matrix by similarity to a query. |
+| `nodesort demo [--max N] [--type T]` | Races `qsort` and nodesort on random data of growing size, verifying every result. |
+
+- **Files:** NumPy `.npy` (`float32`, `float64`, `int32`, `uint32`; IDs also `uint64`) or raw
+  little-endian binaries named `.f32 .f64 .i32 .u32` (or `--type`). Raw matrices need `--dim D`.
+  CSV is not supported.
+- **`top`:**
+  - Scores are computed in double precision on all cores and ranked with the stable key-value sort,
+    so equal scores keep row order. Rows with an undefined score (for example a zero vector under
+    cosine) go last.
+  - Rows are identified by their row number, or by your own IDs with `--ids ids.npy`.
+  - `-o` writes a structured `.npy`: `r = np.load("top.npy"); r["id"], r["score"]`.
+- **Exit codes:** 0 ok, 1 usage error, 2 file or data error, 3 sort error. `nodesort <command>
+  --help` lists every option.
+
+### Mahalanobis distance via whitening
+
+`top` has no Mahalanobis metric, but L2 on *whitened* vectors is exactly the Mahalanobis distance.
+Whiten once with NumPy, then rank with `--metric l2`:
+
+```python
+import numpy as np
+X = np.load("embeddings.npy").astype(np.float64)
+S = np.cov(X, rowvar=False) + 1e-6 * np.eye(X.shape[1])   # regularize: embeddings are often near-singular
+L = np.linalg.cholesky(np.linalg.inv(S))                   # S⁻¹ = L Lᵀ
+np.save("emb_white.npy", (X @ L).astype(np.float32))
+np.save("q_white.npy", (np.load("q.npy").astype(np.float64) @ L).astype(np.float32))
+```
+
+```console
+$ nodesort top emb_white.npy --query q_white.npy --metric l2 -k 10
+```
+
+The covariance step costs O(N·D²) once; every query afterwards costs the same as cosine.
 
 ## API
 

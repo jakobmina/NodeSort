@@ -18,9 +18,12 @@ static/shared library, plus tools that only consume the public API.
 | Public API | Argument and option validation, defaults, status strings, version. Only layer with exported symbols. | `include/nodesort/nodesort.h`, `src/nodesort.c` |
 | Sort engine | Choosing the strategy and running it; every allocation; the intact-on-failure guarantee. | `src/sort.c`, `src/radix_impl.h`, `src/sort.h` |
 | Thread layer | Threads, mutex, condition variable, barrier, CPU count over POSIX threads or Win32. | `src/thread.c` |
+| CLI (`nodesort` executable) | File formats, similarity scoring, user-facing messages and exit codes. | `tools/cli/` |
 
 Dependencies point downward only. The benchmark, example, fuzzer and tests use the public API
-(the internal tests also link a fault-injection build, see Verification).
+(the internal tests also link a fault-injection build, see Verification). The CLI uses the public
+API for every sort. It also compiles `src/thread.c` into the executable to parallelize scoring,
+because the library deliberately exports no threading API.
 
 ## Decisions
 
@@ -98,6 +101,19 @@ working. The header is the single source of the version: CMake parses it. While
 the version is 0.x, the SONAME is `0.<minor>` and the CMake package compatibility is
 `SameMinorVersion`.
 
+**CLI decisions.**
+- Files are `.npy` (own reader/writer: v1–3 headers; little-endian `f4 f8 i4 u4 u8`; C order) or
+  raw little-endian binaries. Big-endian, Fortran-ordered, >2-D and truncated files fail with a
+  message saying how to fix them. Files are read fully into memory (no mmap).
+- `top` scores each row in double precision (threads over rows), then ranks float32 keys with
+  `nodesort_kv_f32` carrying the IDs (u32, or u64 above 2³² rows or when given). The radix sort is
+  O(N), so scoring (O(N·D)) dominates the time. Cosine of a zero row is NaN, so it ranks last by
+  the library's rule.
+- `-o` writes one structured `.npy` (`id`, `score`) so IDs and scores cannot get separated. `sort`
+  never writes without `-o`.
+- Exit codes: 0 ok, 1 usage, 2 file/data, 3 sort.
+- The installed executable carries a relative RPATH to the library directory.
+
 ## Distribution
 
 CMake ≥ 3.16 exports `nodesort::nodesort` and generates `nodesort.pc`. CPack builds TGZ + DEB (+ RPM
@@ -116,6 +132,9 @@ built against the installed library (find_package and pkg-config), packaging and
   k-th allocation or thread creation fail, for every k, and asserts the array (keys and values) is
   byte-identical afterwards.
 - A concurrency test sorts several arrays at once from separate host threads.
+- CLI end-to-end tests (`tests/cli`): a C fixture generator writes `.npy`/raw/invalid files; `sort`
+  output is compared with the library byte for byte, and `top` with an independent brute force;
+  error messages are checked by regex. They need no Python.
 
 ## Known limitations
 

@@ -15,6 +15,11 @@ All notable changes to this project are documented here. The format follows
 - `nodesort_f64` with the same order rules as `nodesort_f32` (NaNs last, `-0.0` before `+0.0`).
 - `nodesort_bench --type f64|kv-u32|kv-f32|kv-u64`, comparing against `qsort` on `{key, value}`
   records.
+- `nodesort` command-line tool, installed with the packages:
+  - `sort` for `.npy` and raw binary arrays;
+  - `top` for top-k similarity search over embedding matrices (cosine, dot, L2; row numbers or
+    `--ids`; structured `.npy` output);
+  - `demo`, a live race against `qsort`.
 
 ### Changed
 - The radix engine is generic over key width (32/64 bits) and carried value width (none, 4, 8

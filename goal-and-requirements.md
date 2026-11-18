@@ -36,6 +36,8 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 - **Desarrolladores C/C++** que integran la biblioteca en su proyecto vía CMake, pkg-config o paquete
   del sistema.
 - **Empaquetadores** que la construyen e instalan en Linux (`.deb`/`.rpm`), macOS y Windows.
+- **Usuarios con archivos de datos o embeddings** (`.npy`, binarios) y una terminal, que no
+  escriben C.
 
 ## Jobs to Be Done
 
@@ -46,6 +48,9 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 - Cuando ordeno claves que identifican otra cosa (puntuaciones → IDs de documentos, índices de
   estados cuánticos de más de 32 qubits → amplitudes), quiero que los valores asociados se muevan
   con su clave en la misma llamada, conservando el orden de las claves repetidas.
+- Cuando tengo un archivo de embeddings y un vector consulta, quiero los k vectores más similares
+  con su ID desde la terminal, sin escribir código.
+- Cuando evalúo la biblioteca, quiero ver en vivo cuánto más rápida es que `qsort` en mi máquina.
 - Cuando integro una dependencia, quiero que se instale y enlace con las herramientas estándar en
   cualquier SO, para no parchear su build.
 
@@ -66,6 +71,8 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 ## Non-Goals
 
 - Comparador genérico definido por el usuario.
+- CSV en la herramienta de línea de comandos.
+- Métrica de Mahalanobis integrada: se documenta el blanqueo para usar L2 (equivalente exacto).
 - Clave-valor con claves `int32`, valores de tamaño distinto de 4 u 8 bytes (p. ej. complejos de
   16 bytes) y ordenación de `uint64`/`int64` sin valores.
 - Mantener las variantes v1/v2 del prototipo.
@@ -88,6 +95,11 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 - **Opciones** de hilos, dirección y umbral bajo el cual se ordena en secuencial (entradas
   pequeñas); un binario compilado con una versión anterior de la cabecera sigue funcionando.
 - **Errores explícitos** por código de retorno, con texto legible.
+- **Herramienta de línea de comandos `nodesort`**, instalada con los paquetes:
+  - `sort`: ordena arrays 1-D de archivos `.npy` o binarios crudos;
+  - `top`: top-k de una matriz de embeddings frente a un vector consulta (coseno, producto
+    escalar o L2), con IDs por fila o propios, y resultado en tabla o `.npy`;
+  - `demo`: carrera en vivo contra `qsort` con datos aleatorios.
 - **Benchmark CLI** reproducible (tamaño, distribución, hilos, repeticiones, salida CSV) que compara
   contra `qsort`.
 - **Distribución**: biblioteca estática y compartida, instalación con CMake (`find_package`) y
