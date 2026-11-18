@@ -48,59 +48,152 @@ static const char *const dist_names[] = {"uniform", "small-range", "few",
                                          "sorted",  "reversed",    "skewed"};
 enum { DIST_COUNT = sizeof dist_names / sizeof dist_names[0] };
 
-enum { TYPE_U32, TYPE_I32, TYPE_F32 };
-static const char *const type_names[] = {"u32", "i32", "f32"};
+/* ── Element types ─────────────────────────────────────────────────────── */
+enum { KEY_U32, KEY_I32, KEY_F32, KEY_U64, KEY_F64 };
 
-static uint32_t float_bits(float f) {
+typedef struct {
+    const char *name;
+    int key;      /* KEY_* */
+    size_t ksize; /* bytes per key */
+    size_t vsize; /* bytes per carried value, 0 = plain sort */
+} type_info;
+
+static const type_info types[] = {
+    {"u32", KEY_U32, 4, 0},    {"i32", KEY_I32, 4, 0},    {"f32", KEY_F32, 4, 0},
+    {"f64", KEY_F64, 8, 0},    {"kv-u32", KEY_U32, 4, 4}, {"kv-f32", KEY_F32, 4, 4},
+    {"kv-u64", KEY_U64, 8, 8},
+};
+enum { TYPE_COUNT = sizeof types / sizeof types[0], TYPE_I32 = 1 };
+
+static uint64_t float_bits(float f) {
     uint32_t b;
     memcpy(&b, &f, sizeof b);
     return b;
 }
+static uint64_t double_bits(double d) {
+    uint64_t b;
+    memcpy(&b, &d, sizeof b);
+    return b;
+}
 
-/* f32 data are real-valued (no NaNs), so the qsort reference stays exact. */
-static void generate(uint32_t *a, size_t n, int dist, int type, uint64_t seed) {
+/* Key bits per element. Float data are real-valued (no NaNs), so the qsort reference stays exact.
+ */
+static void generate(uint64_t *a, size_t n, int dist, int key, uint64_t seed) {
     uint64_t s = seed;
-    uint32_t range = (uint32_t)(n * 10u > UINT32_MAX ? UINT32_MAX : n * 10u);
+    uint64_t range = n * 10u;
     for (size_t i = 0; i < n; i++) {
-        uint32_t r = (uint32_t)(rng_next(&s) >> 32);
-        if (type == TYPE_F32) {
-            switch (dist) {
-            case 0: a[i] = float_bits((float)(int32_t)r / 2147483648.0f); break;
-            case 1: a[i] = float_bits((float)(r % range)); break;
-            case 2: a[i] = float_bits((float)(r % 16u) * 0.25f); break;
-            case 3: a[i] = float_bits((float)i); break;
-            case 4: a[i] = float_bits((float)(n - i)); break;
-            default: a[i] = float_bits((r % 10u) ? 0.5f : (float)(int32_t)r); break;
-            }
+        uint64_t r64 = rng_next(&s);
+        uint32_t r = (uint32_t)(r64 >> 32);
+        double v;
+        switch (dist) {
+        case 0: v = (double)(int32_t)r / 2147483648.0; break;
+        case 1: v = (double)(r64 % range); break;
+        case 2: v = (double)(r % 16u) * 0.25; break;
+        case 3: v = (double)i; break;
+        case 4: v = (double)(n - i); break;
+        default: v = (r % 10u) ? 0.5 : (double)(int32_t)r; break;
+        }
+        if (key == KEY_F32) {
+            a[i] = float_bits((float)v);
             continue;
         }
-        switch (dist) {
-        case 0: a[i] = r; break;
-        case 1: a[i] = r % range; break;
-        case 2: a[i] = r % 16u; break;
-        case 3: a[i] = (uint32_t)i; break;
-        case 4: a[i] = (uint32_t)(n - i); break;
-        default: a[i] = (r % 10u) ? 42u : r; break;
+        if (key == KEY_F64) {
+            a[i] = double_bits(v);
+            continue;
         }
+        uint64_t x;
+        switch (dist) {
+        case 0: x = key == KEY_U64 ? r64 : r; break;
+        case 1: x = r64 % range; break;
+        case 2: x = r % 16u; break;
+        case 3: x = i; break;
+        case 4: x = n - i; break;
+        default: x = (r % 10u) ? 42u : (key == KEY_U64 ? r64 : r); break;
+        }
+        a[i] = key == KEY_U64 ? x : (x & 0xFFFFFFFFu);
     }
 }
 
-static int g_descending;
+static int g_descending, g_key;
 
-static int cmp_i32(const void *a, const void *b) {
-    int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
-    int c = (x > y) - (x < y);
+/* qsort comparator over records whose key sits at offset 0. */
+static int cmp_rec(const void *pa, const void *pb) {
+    int c;
+    switch (g_key) {
+    case KEY_I32: {
+        int32_t x, y;
+        memcpy(&x, pa, 4);
+        memcpy(&y, pb, 4);
+        c = (x > y) - (x < y);
+        break;
+    }
+    case KEY_F32: {
+        float x, y;
+        memcpy(&x, pa, 4);
+        memcpy(&y, pb, 4);
+        c = (x > y) - (x < y);
+        break;
+    }
+    case KEY_F64: {
+        double x, y;
+        memcpy(&x, pa, 8);
+        memcpy(&y, pb, 8);
+        c = (x > y) - (x < y);
+        break;
+    }
+    case KEY_U64: {
+        uint64_t x, y;
+        memcpy(&x, pa, 8);
+        memcpy(&y, pb, 8);
+        c = (x > y) - (x < y);
+        break;
+    }
+    default: {
+        uint32_t x, y;
+        memcpy(&x, pa, 4);
+        memcpy(&y, pb, 4);
+        c = (x > y) - (x < y);
+        break;
+    }
+    }
     return g_descending ? -c : c;
 }
-static int cmp_u32(const void *a, const void *b) {
-    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
-    int c = (x > y) - (x < y);
-    return g_descending ? -c : c;
+
+static void put(unsigned char *p, size_t size, uint64_t bits) {
+    if (size == 8) {
+        memcpy(p, &bits, 8);
+    } else {
+        uint32_t b = (uint32_t)bits;
+        memcpy(p, &b, 4);
+    }
 }
-static int cmp_f32(const void *a, const void *b) {
-    float x = *(const float *)a, y = *(const float *)b;
-    int c = (x > y) - (x < y);
-    return g_descending ? -c : c;
+
+static uint64_t get(const unsigned char *p, size_t size) {
+    if (size == 8) {
+        uint64_t b;
+        memcpy(&b, p, 8);
+        return b;
+    }
+    uint32_t b;
+    memcpy(&b, p, 4);
+    return b;
+}
+
+static nodesort_status run_nodesort(const type_info *t, unsigned char *keys, unsigned char *vals,
+                                    size_t n, const nodesort_options *opt) {
+    if (t->vsize) {
+        if (t->key == KEY_F32)
+            return nodesort_kv_f32((float *)(void *)keys, vals, t->vsize, n, opt);
+        if (t->key == KEY_U64)
+            return nodesort_kv_u64((uint64_t *)(void *)keys, vals, t->vsize, n, opt);
+        return nodesort_kv_u32((uint32_t *)(void *)keys, vals, t->vsize, n, opt);
+    }
+    switch (t->key) {
+    case KEY_I32: return nodesort_i32((int32_t *)(void *)keys, n, opt);
+    case KEY_F32: return nodesort_f32((float *)(void *)keys, n, opt);
+    case KEY_F64: return nodesort_f64((double *)(void *)keys, n, opt);
+    default: return nodesort_u32((uint32_t *)(void *)keys, n, opt);
+    }
 }
 
 /* ── CLI ───────────────────────────────────────────────────────────────── */
@@ -127,7 +220,7 @@ static void usage(FILE *out) {
                  "  --threads LIST  thread counts, 0 = auto (default 1,2,4,0)\n"
                  "  --reps N        repetitions per measurement, best is reported (default 5)\n"
                  "  --seed N        RNG seed (default 7)\n"
-                 "  --type T        i32, u32 or f32 (default i32)\n"
+                 "  --type T        u32, i32, f32, f64, kv-u32, kv-f32 or kv-u64 (default i32)\n"
                  "  --desc          sort in descending order\n"
                  "  --csv           machine-readable output\n"
                  "  --version       print the library version\n");
@@ -225,14 +318,11 @@ static int parse_args(int argc, char **argv, config *c) {
             if (!parse_u64(v, &c->seed)) goto bad;
             i++;
         } else if (strcmp(a, "--type") == 0) {
-            if (strcmp(v, "i32") == 0)
-                c->type = TYPE_I32;
-            else if (strcmp(v, "u32") == 0)
-                c->type = TYPE_U32;
-            else if (strcmp(v, "f32") == 0)
-                c->type = TYPE_F32;
-            else
-                goto bad;
+            int found = -1;
+            for (int t = 0; t < TYPE_COUNT; t++)
+                if (strcmp(v, types[t].name) == 0) found = t;
+            if (found < 0) goto bad;
+            c->type = found;
             i++;
         } else {
             fprintf(stderr, "nodesort_bench: unknown option %s\n", a);
@@ -262,7 +352,7 @@ static int parse_args(int argc, char **argv, config *c) {
 static void report(const config *c, size_t n, const char *dist, const char *impl, double ms,
                    double qsort_ms, int ok) {
     if (c->csv) {
-        printf("%zu,%s,%s,%s,%.3f,%.2f,%d\n", n, dist, type_names[c->type], impl, ms, qsort_ms / ms,
+        printf("%zu,%s,%s,%s,%.3f,%.2f,%d\n", n, dist, types[c->type].name, impl, ms, qsort_ms / ms,
                ok);
     } else {
         printf("  %-11zu %-12s %-14s %10.2f %8.2fx  %s\n", n, dist, impl, ms, qsort_ms / ms,
@@ -278,40 +368,45 @@ int main(int argc, char **argv) {
         printf("n,dist,type,impl,best_ms,speedup_vs_qsort,correct\n");
     } else {
         printf("nodesort %s  type=%s  order=%s  reps=%u  seed=%llu\n", nodesort_version(),
-               type_names[c.type], c.descending ? "desc" : "asc", c.reps,
+               types[c.type].name, c.descending ? "desc" : "asc", c.reps,
                (unsigned long long)c.seed);
         printf("  %-11s %-12s %-14s %10s %9s  %s\n", "n", "dist", "impl", "best ms", "speedup",
                "check");
     }
 
+    const type_info *t = &types[c.type];
+    size_t rsize = t->ksize + t->vsize; /* qsort baseline sorts {key, value} records */
     g_descending = c.descending;
-    int (*cmp)(const void *, const void *) = c.type == TYPE_F32   ? cmp_f32
-                                             : c.type == TYPE_I32 ? cmp_i32
-                                                                  : cmp_u32;
+    g_key = t->key;
     int all_ok = 1;
 
     for (size_t si = 0; si < c.nsizes; si++) {
         size_t n = c.sizes[si];
-        uint32_t *input = (uint32_t *)malloc(n * sizeof *input);
-        uint32_t *ref = (uint32_t *)malloc(n * sizeof *ref);
-        uint32_t *work = (uint32_t *)malloc(n * sizeof *work);
-        if (!input || !ref || !work) {
+        uint64_t *input = (uint64_t *)malloc(n * sizeof *input);
+        unsigned char *recs = (unsigned char *)malloc(n * rsize);
+        unsigned char *keys = (unsigned char *)malloc(n * t->ksize);
+        unsigned char *vals = (unsigned char *)malloc(n * (t->vsize ? t->vsize : 1));
+        if (!input || !recs || !keys || !vals) {
             fprintf(stderr, "nodesort_bench: out of memory for n=%zu\n", n);
             free(input);
-            free(ref);
-            free(work);
+            free(recs);
+            free(keys);
+            free(vals);
             return EXIT_FAILURE;
         }
 
         for (size_t di = 0; di < c.ndists; di++) {
             int dist = c.dists[di];
-            generate(input, n, dist, c.type, c.seed);
+            generate(input, n, dist, t->key, c.seed);
 
             double qsort_ms = -1;
             for (unsigned r = 0; r < c.reps; r++) {
-                memcpy(ref, input, n * sizeof *ref);
+                for (size_t i = 0; i < n; i++) {
+                    put(recs + i * rsize, t->ksize, input[i]);
+                    if (t->vsize) put(recs + i * rsize + t->ksize, t->vsize, i);
+                }
                 double t0 = now_ms();
-                qsort(ref, n, sizeof *ref, cmp);
+                qsort(recs, n, rsize, cmp_rec);
                 double el = now_ms() - t0;
                 if (qsort_ms < 0 || el < qsort_ms) qsort_ms = el;
             }
@@ -323,17 +418,13 @@ int main(int argc, char **argv) {
                 opt.threads = c.threads[ti];
                 opt.descending = c.descending;
                 double best = -1;
-                int ok = 1;
                 for (unsigned r = 0; r < c.reps; r++) {
-                    memcpy(work, input, n * sizeof *work);
+                    for (size_t i = 0; i < n; i++) {
+                        put(keys + i * t->ksize, t->ksize, input[i]);
+                        if (t->vsize) put(vals + i * t->vsize, t->vsize, i);
+                    }
                     double t0 = now_ms();
-                    nodesort_status st;
-                    if (c.type == TYPE_F32)
-                        st = nodesort_f32((float *)(void *)work, n, &opt);
-                    else if (c.type == TYPE_I32)
-                        st = nodesort_i32((int32_t *)work, n, &opt);
-                    else
-                        st = nodesort_u32(work, n, &opt);
+                    nodesort_status st = run_nodesort(t, keys, vals, n, &opt);
                     double el = now_ms() - t0;
                     if (st != NODESORT_OK) {
                         fprintf(stderr, "nodesort_bench: %s\n", nodesort_strerror(st));
@@ -341,7 +432,16 @@ int main(int argc, char **argv) {
                     }
                     if (best < 0 || el < best) best = el;
                 }
-                ok = memcmp(work, ref, n * sizeof *work) == 0;
+                /* Keys must match qsort's; each value (an input index) must still own its key. */
+                int ok = 1;
+                for (size_t i = 0; i < n && ok; i++) {
+                    uint64_t k = get(keys + i * t->ksize, t->ksize);
+                    ok = k == get(recs + i * rsize, t->ksize);
+                    if (ok && t->vsize) {
+                        uint64_t v = get(vals + i * t->vsize, t->vsize);
+                        ok = v < n && input[v] == k;
+                    }
+                }
                 all_ok &= ok;
                 char label[32];
                 if (opt.threads == 0)
@@ -352,8 +452,9 @@ int main(int argc, char **argv) {
             }
         }
         free(input);
-        free(ref);
-        free(work);
+        free(recs);
+        free(keys);
+        free(vals);
     }
     return all_ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

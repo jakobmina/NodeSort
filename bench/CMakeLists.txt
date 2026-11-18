@@ -12,4 +12,10 @@ if(NODESORT_BUILD_TESTS)
     COMMAND nodesort_bench --n 1000,200000 --dist all --threads 1,3,0 --reps 1 --csv)
   add_test(NAME bench_smoke_f32_desc
     COMMAND nodesort_bench --n 1000,200000 --dist all --threads 1,3,0 --reps 1 --csv --type f32 --desc)
+  foreach(_type f64 kv-u32 kv-f32 kv-u64)
+    add_test(NAME bench_smoke_${_type}
+      COMMAND nodesort_bench --n 1000,200000 --dist all --threads 1,3 --reps 1 --csv --type ${_type})
+  endforeach()
+  add_test(NAME bench_smoke_kv-f32_desc
+    COMMAND nodesort_bench --n 200000 --dist all --threads 3 --reps 1 --csv --type kv-f32 --desc)
 endif()
