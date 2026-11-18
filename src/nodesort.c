@@ -35,12 +35,12 @@ static nodesort_status run(uint32_t *data, size_t n, ns_keymap km, const nodesor
         if (opt->struct_size < NS_OPTIONS_MIN_SIZE) return NODESORT_EINVAL;
         threads = opt->threads;
         seq_threshold = opt->seq_threshold;
-        if (NS_HAS_FIELD(opt, descending) && opt->descending) km.xor_mask ^= UINT32_C(0xFFFFFFFF);
+        if (NS_HAS_FIELD(opt, descending) && opt->descending) km.xor_mask = ~km.xor_mask;
     }
     if (threads == 0) threads = ns_cpu_count();
     if (seq_threshold == 0) seq_threshold = NS_DEFAULT_SEQ_THRESHOLD;
 
-    return ns_sort_u32(data, n, km, threads, seq_threshold);
+    return ns_sort32(data, NULL, 0, n, km, threads, seq_threshold);
 }
 
 nodesort_status nodesort_u32(uint32_t *data, size_t n, const nodesort_options *opt) {

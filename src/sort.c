@@ -1,5 +1,5 @@
-/* Parallel LSD radix sort for 32-bit keys. Design: architecture.md (id nodesort-architecture).
- * SPDX-License-Identifier: MIT */
+/* Parallel LSD radix sort for 32/64-bit keys with optional carried values. Design: architecture.md
+ * (id nodesort-architecture). SPDX-License-Identifier: MIT */
 #include "sort.h"
 
 #include <stdlib.h>
@@ -9,13 +9,13 @@
 #include "thread.h"
 
 #define NS_BUCKETS 256u
-#define NS_PASSES 4u
+#define NS_MAX_PASSES 8u
 #define NS_INSERTION_MAX 64u
 #define NS_MIN_PER_THREAD ((size_t)1 << 15)
 #define NS_MAX_THREADS 256u
 
 typedef size_t ns_hist[NS_BUCKETS];
-typedef ns_hist ns_hist_all[NS_PASSES];
+typedef ns_hist ns_hist_all[NS_MAX_PASSES];
 
 #if defined(NODESORT_FAULT_INJECTION)
 int ns_fault_alloc_countdown = -1;
@@ -38,12 +38,13 @@ static void *ns_alloc(size_t count, size_t size) {
     return malloc(count * size);
 }
 
-static void reverse(uint32_t *a, size_t n) {
-    for (size_t i = 0, j = n - 1; i < j; i++, j--) {
-        uint32_t t = a[i];
-        a[i] = a[j];
-        a[j] = t;
-    }
+static unsigned effective_threads(size_t n, unsigned requested, size_t seq_threshold) {
+    size_t max_by_size = n / NS_MIN_PER_THREAD;
+    size_t t = requested;
+    if (t > NS_MAX_THREADS) t = NS_MAX_THREADS;
+    if (t > max_by_size) t = max_by_size;
+    if (t < 1 || n < seq_threshold) t = 1;
+    return (unsigned)t;
 }
 
 /* ── Shared building blocks ────────────────────────────────────────────── */
@@ -58,17 +59,18 @@ static int pass_is_trivial(const size_t *total, size_t n) {
 enum { GATE_PENDING, GATE_GO, GATE_ABORT };
 
 typedef struct ns_ctx {
-    uint32_t *data;
-    uint32_t *buf;
+    void *keys, *kbuf; /* keys and their scratch buffer                   */
+    void *vals, *vbuf; /* carried values and their buffer; NULL when none */
     size_t n;
     ns_keymap km;
+    unsigned passes; /* 4 for 32-bit keys, 8 for 64-bit keys */
     unsigned nthreads;
-    void (*run)(struct ns_ctx *c, unsigned id); /* worker body for this key kind */
+    void (*run)(struct ns_ctx *c, unsigned id); /* worker body for this instantiation */
 
     ns_hist_all *hist0; /* [nthreads] histograms of each thread's initial chunk */
     ns_hist *count;     /* [nthreads] digit counts of the current pass          */
     ns_hist *offset;    /* [nthreads] scatter start offsets of the current pass */
-    unsigned active[NS_PASSES];
+    unsigned active[NS_MAX_PASSES];
     unsigned nactive;
 
     ns_barrier barrier;
@@ -91,7 +93,7 @@ static void chunk_bounds(size_t n, unsigned nthreads, unsigned t, size_t *begin,
 
 static void plan_passes(ns_ctx *c) {
     c->nactive = 0;
-    for (unsigned p = 0; p < NS_PASSES; p++) {
+    for (unsigned p = 0; p < c->passes; p++) {
         ns_hist total = {0};
         for (unsigned t = 0; t < c->nthreads; t++)
             for (unsigned d = 0; d < NS_BUCKETS; d++) total[d] += c->hist0[t][p][d];
@@ -127,17 +129,10 @@ static void open_gate(ns_ctx *c, int state) {
 }
 
 /* Every resource is acquired before the first element moves, so any failure leaves data intact. */
-static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, ns_keymap km,
-                                 unsigned nthreads, void (*run)(ns_ctx *, unsigned)) {
+static nodesort_status radix_par(ns_ctx *cp) {
     nodesort_status status = NODESORT_OK;
-    ns_ctx c;
-    memset(&c, 0, sizeof c);
-    c.data = data;
-    c.buf = buf;
-    c.n = n;
-    c.km = km;
-    c.nthreads = nthreads;
-    c.run = run;
+    ns_ctx c = *cp;
+    unsigned nthreads = c.nthreads;
     c.gate = GATE_PENDING;
 
     ns_worker *workers = (ns_worker *)ns_alloc(nthreads, sizeof *workers);
@@ -174,7 +169,7 @@ static nodesort_status radix_par(uint32_t *data, uint32_t *buf, size_t n, ns_key
         status = NODESORT_ETHREAD;
     } else {
         open_gate(&c, GATE_GO);
-        run(&c, 0);
+        c.run(&c, 0);
     }
     for (unsigned t = 1; t < started; t++) ns_thread_join(&workers[t].thread);
 
@@ -192,23 +187,104 @@ free_memory:
 }
 
 /* ── Instantiations ────────────────────────────────────────────────────── */
-/* One engine per key kind; see architecture.md (Keys are computed on the fly). */
-#define NS_FN(name) name##_int
-#define NS_KEY(x, km) ((x) ^ (km).xor_mask)
+/* One engine per (key, value) kind; see architecture.md (Keys are computed on the fly). */
+#define NS_INT_KEY(x, km) ((x) ^ (NS_K)(km).xor_mask)
+
+#define NS_K uint32_t
+#define NS_KPASSES 4u
+#define NS_HAS_V 0
+#define NS_KEY NS_INT_KEY
+#define NS_FN(name) name##_i32
 #include "radix_impl.h"
 #undef NS_FN
 #undef NS_KEY
-
-#define NS_FN(name) name##_flt
-#define NS_KEY(x, km) ns_key((x), (km))
+#define NS_KEY(x, km) ns_key32((x), (km))
+#define NS_FN(name) name##_f32
 #include "radix_impl.h"
 #undef NS_FN
 #undef NS_KEY
+#undef NS_HAS_V
 
-/* ── Entry point ───────────────────────────────────────────────────────── */
-nodesort_status ns_sort_u32(uint32_t *data, size_t n, ns_keymap km, unsigned threads,
-                            size_t seq_threshold) {
-    if (km.float_mask != 0 || km.nan_mask != 0)
-        return sort_flt(data, n, km, threads, seq_threshold);
-    return sort_int(data, n, km, threads, seq_threshold);
+#define NS_HAS_V 1
+#define NS_V uint32_t
+#define NS_KEY NS_INT_KEY
+#define NS_FN(name) name##_i32_v4
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+#define NS_KEY(x, km) ns_key32((x), (km))
+#define NS_FN(name) name##_f32_v4
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+#undef NS_V
+#define NS_V uint64_t
+#define NS_KEY NS_INT_KEY
+#define NS_FN(name) name##_i32_v8
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+#define NS_KEY(x, km) ns_key32((x), (km))
+#define NS_FN(name) name##_f32_v8
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+#undef NS_V
+#undef NS_HAS_V
+#undef NS_KPASSES
+#undef NS_K
+
+#define NS_K uint64_t
+#define NS_KPASSES 8u
+#define NS_HAS_V 0
+#define NS_KEY(x, km) ns_key64((x), (km))
+#define NS_FN(name) name##_f64
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_KEY
+#undef NS_HAS_V
+#define NS_HAS_V 1
+#define NS_KEY NS_INT_KEY
+#define NS_V uint32_t
+#define NS_FN(name) name##_u64_v4
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_V
+#define NS_V uint64_t
+#define NS_FN(name) name##_u64_v8
+#include "radix_impl.h"
+#undef NS_FN
+#undef NS_V
+#undef NS_KEY
+#undef NS_HAS_V
+#undef NS_KPASSES
+#undef NS_K
+
+/* ── Entry points ──────────────────────────────────────────────────────── */
+nodesort_status ns_sort32(uint32_t *keys, void *values, size_t value_size, size_t n, ns_keymap km,
+                          unsigned threads, size_t seq_threshold) {
+    int flt = ns_keymap_is_float(km);
+    switch (value_size) {
+    case 0:
+        return flt ? sort_f32(keys, n, km, threads, seq_threshold)
+                   : sort_i32(keys, n, km, threads, seq_threshold);
+    case 4:
+        return flt ? sort_f32_v4(keys, (uint32_t *)values, n, km, threads, seq_threshold)
+                   : sort_i32_v4(keys, (uint32_t *)values, n, km, threads, seq_threshold);
+    case 8:
+        return flt ? sort_f32_v8(keys, (uint64_t *)values, n, km, threads, seq_threshold)
+                   : sort_i32_v8(keys, (uint64_t *)values, n, km, threads, seq_threshold);
+    default: return NODESORT_EINVAL;
+    }
+}
+
+nodesort_status ns_sort64(uint64_t *keys, void *values, size_t value_size, size_t n, ns_keymap km,
+                          unsigned threads, size_t seq_threshold) {
+    int flt = ns_keymap_is_float(km);
+    if (flt && value_size == 0) return sort_f64(keys, n, km, threads, seq_threshold);
+    if (!flt && value_size == 4)
+        return sort_u64_v4(keys, (uint32_t *)values, n, km, threads, seq_threshold);
+    if (!flt && value_size == 8)
+        return sort_u64_v8(keys, (uint64_t *)values, n, km, threads, seq_threshold);
+    return NODESORT_EINVAL;
 }
