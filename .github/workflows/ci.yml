@@ -110,6 +110,12 @@ jobs:
           cmake --build consumer --config Release
           if [ "$RUNNER_OS" = "Windows" ]; then export PATH="$PWD/prefix/bin:$PATH"; fi
           ctest --test-dir consumer -C Release --output-on-failure
+      - name: Run the installed CLI
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then export PATH="$PWD/prefix/bin:$PATH"; fi
+          "$PWD/prefix/bin/nodesort" --version
+          "$PWD/prefix/bin/nodesort" demo --max 100k
       - name: Consume with pkg-config
         if: runner.os != 'Windows'
         shell: bash
@@ -136,6 +142,8 @@ jobs:
           sudo apt-get install -y ./build/*.deb
           cc tests/consumer/main.c $(pkg-config --cflags --libs nodesort) -o consumer-deb
           ./consumer-deb
+          nodesort --version
+          nodesort demo --max 10k
       - uses: actions/upload-artifact@v4
         with:
           name: linux-packages

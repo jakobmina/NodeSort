@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Added
+- Key-value sorts `nodesort_kv_u32`, `nodesort_kv_f32` and `nodesort_kv_u64`: sort the keys and
+  apply the same permutation to a parallel array of 4- or 8-byte values. Stable in both directions;
+  both arrays are left untouched on any error.
+- `nodesort_f64` with the same order rules as `nodesort_f32` (NaNs last, `-0.0` before `+0.0`).
+- `nodesort_bench --type f64|kv-u32|kv-f32|kv-u64`, comparing against `qsort` on `{key, value}`
+  records.
+- `nodesort` command-line tool, installed with the packages:
+  - `sort` for `.npy` and raw binary arrays;
+  - `top` for top-k similarity search over embedding matrices (cosine, dot, L2; row numbers or
+    `--ids`; structured `.npy` output);
+  - `demo`, a live race against `qsort`.
+
+### Changed
+- The radix engine is generic over key width (32/64 bits) and carried value width (none, 4, 8
+  bytes). Existing functions keep their speed and behaviour.
+
+### Compatibility
+- Source and ABI additions only; `nodesort_options` is unchanged. The SONAME moves to `0.3` (0.x
+  policy), so `find_package(nodesort 0.3)`.
+
 ## [0.2.0]
 
 ### Added

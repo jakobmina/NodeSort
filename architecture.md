@@ -18,19 +18,23 @@ static/shared library, plus tools that only consume the public API.
 | Public API | Argument and option validation, defaults, status strings, version. Only layer with exported symbols. | `include/nodesort/nodesort.h`, `src/nodesort.c` |
 | Sort engine | Choosing the strategy and running it; every allocation; the intact-on-failure guarantee. | `src/sort.c`, `src/radix_impl.h`, `src/sort.h` |
 | Thread layer | Threads, mutex, condition variable, barrier, CPU count over POSIX threads or Win32. | `src/thread.c` |
+| CLI (`nodesort` executable) | File formats, similarity scoring, user-facing messages and exit codes. | `tools/cli/` |
 
 Dependencies point downward only. The benchmark, example, fuzzer and tests use the public API
-(the internal tests also link a fault-injection build, see Verification).
+(the internal tests also link a fault-injection build, see Verification). The CLI uses the public
+API for every sort. It also compiles `src/thread.c` into the executable to parallelize scoring,
+because the library deliberately exports no threading API.
 
 ## Decisions
 
-**Algorithm: LSD radix sort, 4 passes × 8 bits.** It replaced the prototype's range buckets
+**Algorithm: LSD radix sort with 8-bit digits** (4 passes for 32-bit keys, 8 for 64-bit keys). It
+replaced the prototype's range buckets
 ("nodes"), which put almost everything on one thread when the data is skewed. Each thread takes an
 equal slice of the array; each pass computes a histogram per thread → scatter offsets ordered by
 digit first, then thread → a stable scatter into the buffer. The pass must be stable, otherwise LSD
 radix gives wrong results. Comparison sorts (sample sort, introsort) and an in-place IPS⁴o-style
 variant were rejected: radix is O(n) with no comparator, and in-place is far more complex. Cost: one
-temporary buffer of n elements per call (accepted by the user).
+temporary buffer of n keys per call, plus n values for key-value sorts (accepted by the user).
 
 **Strategy choice, in order:** n < 2 → nothing; n ≤ 64 → insertion sort, no allocation; already
 ascending → return; *strictly* descending → reverse in place (non-strict would reverse elements
@@ -40,29 +44,44 @@ min(threads, n / 2¹⁵, 256) threads. Passes where every key has the same digit
 ordered-input check exists because the radix scatter is slow on sorted data (10M elements: 513 ms →
 14 ms with the check).
 
-**Keys are computed on the fly.** Every element type is sorted as an unsigned 32-bit radix key,
-computed whenever a digit or comparison is needed. The input array is never rewritten in a
-prepass, which keeps the intact-on-failure guarantee easy to hold. `ns_keymap` (`src/sort.h`):
+**Keys are computed on the fly.** Every element type is sorted as an unsigned 32- or 64-bit radix
+key, computed whenever a digit or comparison is needed. The input array is never rewritten in a
+prepass, which keeps the intact-on-failure guarantee easy to hold. `ns_keymap` (`src/sort.h`,
+64-bit masks; 32-bit keys use the low half):
 `key(b) = (b ^ xor ^ (negative(b) & float_mask)) | (nan(b) & nan_mask)`.
 
 | Type | xor | float_mask | nan_mask |
 |---|---|---|---|
-| `uint32_t` | 0 | 0 | 0 |
+| `uint32_t`, `uint64_t` | 0 | 0 | 0 |
 | `int32_t` | `0x80000000` | 0 | 0 |
 | `float` | `0x80000000` | `0x7FFFFFFF` | `0xFFFFFFFF` |
+| `double` | `0x8000…0` | `0x7FFF…F` | all ones |
 
-- Descending order XORs `0xFFFFFFFF` into `xor`.
+- Descending order inverts `xor` (`~xor`).
 - `float`: negative values have every bit flipped, so -0.0 sorts before +0.0. Every NaN gets the
   largest key in both directions; since the radix sort is stable and writes back the original bits,
   NaNs end last in input order. Rejected: moving NaNs to the end in a prepass (it moves data before
   allocation, breaking the invariant) and the plain IEEE totalOrder trick (negative NaNs first).
-- The engine is instantiated twice from `src/radix_impl.h`: `_int` (XOR only) and `_flt` (full
-  map). Applying the float map to integers made them 15–20% slower. The parallel driver stays
-  shared and calls the variant's worker through `ns_ctx.run`.
-- `float` arrays are accessed as `uint32_t`, so the library builds with `-fno-strict-aliasing`. A
-  static assert requires `sizeof(float) == 4`.
+- `float`/`double` arrays and carried values are accessed as same-width unsigned words, so the
+  library builds with `-fno-strict-aliasing`. Static asserts require 4-byte `float` and 8-byte
+  `double`.
 
-**Invariant — the array stays intact on failure.** Every step that can fail (buffer and bookkeeping
+**One engine template, instantiated per (key, value) kind.** `src/radix_impl.h` is included by
+`sort.c` once per combination the API uses. Its parameters: key word (32/64 bits), key map (XOR only
+for integers, the full map for floats), and an optional carried value word (4/8 bytes). There are 9
+instances: 32-bit int/float keys × values none/4/8, `double` keys only, and `uint64_t` keys ×
+values 4/8.
+- Integers get their own XOR-only instance because applying the float map to them made them 15–20%
+  slower.
+- With values, every move of a key (scatter, insertion sort, reverse, copy-back) moves the value at
+  the same index. Stability then comes from the stable radix sort and the strict fast paths.
+- Values are raw 4/8-byte words, so the API requires them to be aligned to `value_size`.
+- Rejected: sorting (key, index) pairs and permuting values afterwards (an extra random-access
+  pass), and packing key+value into 64-bit keys (only covers u32 + 4 bytes).
+- The parallel driver (`ns_ctx`, `radix_par`) is type-agnostic: it works on `void *` buffers and a
+  per-instance pass count, and calls the instance's worker through `ns_ctx.run`.
+
+**Invariant — the array (both arrays, for key-value sorts) stays intact on failure.** Every step that can fail (buffer and bookkeeping
 allocation, barrier and gate initialisation, creating each worker thread) happens before the first
 element moves. Workers wait at a start gate. If creating thread k fails, the gate is set to abort,
 the threads already started are joined and `NODESORT_ETHREAD` is returned. After the gate opens,
@@ -82,6 +101,19 @@ working. The header is the single source of the version: CMake parses it. While
 the version is 0.x, the SONAME is `0.<minor>` and the CMake package compatibility is
 `SameMinorVersion`.
 
+**CLI decisions.**
+- Files are `.npy` (own reader/writer: v1–3 headers; little-endian `f4 f8 i4 u4 u8`; C order) or
+  raw little-endian binaries. Big-endian, Fortran-ordered, >2-D and truncated files fail with a
+  message saying how to fix them. Files are read fully into memory (no mmap).
+- `top` scores each row in double precision (threads over rows), then ranks float32 keys with
+  `nodesort_kv_f32` carrying the IDs (u32, or u64 above 2³² rows or when given). The radix sort is
+  O(N), so scoring (O(N·D)) dominates the time. Cosine of a zero row is NaN, so it ranks last by
+  the library's rule.
+- `-o` writes one structured `.npy` (`id`, `score`) so IDs and scores cannot get separated. `sort`
+  never writes without `-o`.
+- Exit codes: 0 ok, 1 usage, 2 file/data, 3 sort.
+- The installed executable carries a relative RPATH to the library directory.
+
 ## Distribution
 
 CMake ≥ 3.16 exports `nodesort::nodesort` and generates `nodesort.pc`. CPack builds TGZ + DEB (+ RPM
@@ -94,15 +126,21 @@ built against the installed library (find_package and pkg-config), packaging and
 
 - Property tests against a stable reference sort whose comparator is written from the documented
   rules, compared bit-for-bit, across types, both directions, sizes, distributions (including IEEE
-  special values) and thread counts.
+  special values) and thread counts. Key-value tests carry each element's input position as its
+  value, so instability or a misplaced value is visible.
 - A fault-injection build (`NODESORT_FAULT_INJECTION`, compiled out of release builds) makes the
-  k-th allocation or thread creation fail, for every k, and asserts the array is byte-identical
-  afterwards.
+  k-th allocation or thread creation fail, for every k, and asserts the array (keys and values) is
+  byte-identical afterwards.
 - A concurrency test sorts several arrays at once from separate host threads.
+- CLI end-to-end tests (`tests/cli`): a C fixture generator writes `.npy`/raw/invalid files; `sort`
+  output is compared with the library byte for byte, and `top` with an independent brute force;
+  error messages are checked by regex. They need no Python.
 
 ## Known limitations
 
-- Needs 4·n bytes of extra memory; no in-place mode.
+- Needs n·(key size + value size) bytes of extra memory; no in-place mode.
+- The fuzzer covers the single-array sorts only; key-value sorts rely on the property and
+  fault-injection tests.
 - ThreadSanitizer needs `vm.mmap_rnd_bits=28` on recent Linux kernels to start.
 - The original prototype lives unbuilt in `legacy/`; it is not maintained and keeps its known
   crashes.

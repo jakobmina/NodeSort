@@ -25,6 +25,7 @@ option(BUILD_SHARED_LIBS "Build nodesort as a shared library" OFF)
 option(NODESORT_BUILD_TESTS "Build the test suite" ${NODESORT_IS_TOP_LEVEL})
 option(NODESORT_BUILD_BENCH "Build the benchmark CLI" ${NODESORT_IS_TOP_LEVEL})
 option(NODESORT_BUILD_EXAMPLES "Build the examples" ${NODESORT_IS_TOP_LEVEL})
+option(NODESORT_BUILD_CLI "Build the nodesort command-line tool" ${NODESORT_IS_TOP_LEVEL})
 option(NODESORT_BUILD_FUZZ "Build the libFuzzer harness (Clang only)" OFF)
 option(NODESORT_INSTALL "Generate install and package rules" ${NODESORT_IS_TOP_LEVEL})
 option(NODESORT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
@@ -77,6 +78,9 @@ set_target_properties(nodesort PROPERTIES
   EXPORT_NAME nodesort)
 
 # ── Sub-projects ────────────────────────────────────────────────────────
+if(NODESORT_BUILD_CLI)
+  add_subdirectory(tools/cli)
+endif()
 if(NODESORT_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
