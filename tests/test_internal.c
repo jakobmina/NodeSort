@@ -53,6 +53,58 @@ static void exercise_faults(int *countdown, nodesort_status expected, unsigned t
     free(a);
 }
 
+/* Same as exercise_faults() for a key-value sort: keys AND values must stay intact. */
+static void exercise_faults_kv(int *countdown, nodesort_status expected, unsigned threads) {
+    size_t n = N_PARALLEL;
+    uint64_t *orig_k = (uint64_t *)th_xmalloc(n * sizeof *orig_k);
+    uint32_t *orig_v = (uint32_t *)th_xmalloc(n * sizeof *orig_v);
+    uint64_t *k = (uint64_t *)th_xmalloc(n * sizeof *k);
+    uint32_t *v = (uint32_t *)th_xmalloc(n * sizeof *v);
+    th_rng rng;
+    rng.s = 11;
+    for (size_t i = 0; i < n; i++) {
+        orig_k[i] = th_next(&rng);
+        orig_v[i] = (uint32_t)i;
+    }
+
+    nodesort_options opt;
+    nodesort_options_init(&opt);
+    opt.threads = threads;
+    opt.seq_threshold = 1;
+
+    int injected = 0;
+    for (int f = 0; f < 1000; f++) {
+        memcpy(k, orig_k, n * sizeof *k);
+        memcpy(v, orig_v, n * sizeof *v);
+        *countdown = f;
+        nodesort_status st = nodesort_kv_u64(k, v, sizeof *v, n, &opt);
+        *countdown = -1;
+        if (st == NODESORT_OK) {
+            int ok = 1;
+            for (size_t i = 1; i < n && ok; i++) ok = k[i - 1] <= k[i] && orig_k[v[i]] == k[i];
+            CHECK(ok);
+            break;
+        }
+        injected++;
+        CHECK_MSG(st == expected, "f=%d status=%d", f, (int)st);
+        CHECK_MSG(memcmp(k, orig_k, n * sizeof *k) == 0, "keys modified on failure f=%d", f);
+        CHECK_MSG(memcmp(v, orig_v, n * sizeof *v) == 0, "values modified on failure f=%d", f);
+    }
+    CHECK(injected > 0);
+    free(orig_k);
+    free(orig_v);
+    free(k);
+    free(v);
+}
+
+static void test_kv_alloc_failures(void) {
+    exercise_faults_kv(&ns_fault_alloc_countdown, NODESORT_ENOMEM, 4);
+    exercise_faults_kv(&ns_fault_alloc_countdown, NODESORT_ENOMEM, 1);
+}
+static void test_kv_thread_failures(void) {
+    exercise_faults_kv(&ns_fault_thread_countdown, NODESORT_ETHREAD, 8);
+}
+
 static void test_alloc_failures_parallel(void) {
     exercise_faults(&ns_fault_alloc_countdown, NODESORT_ENOMEM, 4);
 }
@@ -107,6 +159,8 @@ int main(void) {
     RUN(test_alloc_failures_parallel);
     RUN(test_alloc_failures_sequential);
     RUN(test_thread_failures);
+    RUN(test_kv_alloc_failures);
+    RUN(test_kv_thread_failures);
     RUN(test_concurrent_callers);
     return TEST_EXIT();
 }

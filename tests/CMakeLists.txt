@@ -4,6 +4,11 @@ nodesort_configure_target(test_api)
 target_link_libraries(test_api PRIVATE nodesort::nodesort)
 add_test(NAME api COMMAND test_api)
 
+add_executable(test_kv test_kv.c)
+nodesort_configure_target(test_kv)
+target_link_libraries(test_kv PRIVATE nodesort::nodesort)
+add_test(NAME kv COMMAND test_kv)
+
 # Internal tests run against a static fault-injection build of the same sources.
 list(TRANSFORM NODESORT_SOURCES PREPEND "${PROJECT_SOURCE_DIR}/" OUTPUT_VARIABLE _ns_abs_sources)
 add_library(nodesort_fault_injection STATIC ${_ns_abs_sources})
@@ -27,4 +32,6 @@ add_test(NAME internal COMMAND test_internal)
 if(WIN32 AND BUILD_SHARED_LIBS)
   add_custom_command(TARGET test_api POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:nodesort> $<TARGET_FILE_DIR:test_api>)
+  add_custom_command(TARGET test_kv POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:nodesort> $<TARGET_FILE_DIR:test_kv>)
 endif()
