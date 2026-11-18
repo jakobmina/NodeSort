@@ -7,8 +7,8 @@ status: active
 
 # nodesort
 
-Biblioteca C portable para ordenar en paralelo arrays numéricos (enteros y flotantes de 32 bits),
-más rápido que `qsort`.
+Biblioteca C portable para ordenar en paralelo arrays numéricos (enteros y flotantes), solos o
+arrastrando un array paralelo de valores, más rápido que `qsort`.
 
 ## Overview
 
@@ -43,6 +43,9 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
   todos los núcleos, para no escribir ni mantener mi propio sort paralelo.
 - Cuando tengo puntuaciones `float` (p. ej. similitudes de embeddings), quiero ordenarlas — también
   de mayor a menor — sin que un NaN aparezca entre las primeras posiciones.
+- Cuando ordeno claves que identifican otra cosa (puntuaciones → IDs de documentos, índices de
+  estados cuánticos de más de 32 qubits → amplitudes), quiero que los valores asociados se muevan
+  con su clave en la misma llamada, conservando el orden de las claves repetidas.
 - Cuando integro una dependencia, quiero que se instale y enlace con las herramientas estándar en
   cualquier SO, para no parchear su build.
 
@@ -50,11 +53,12 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 - Resultado idéntico a `qsort` para toda entrada, incluidos casos límite (vacío, un elemento, todos
   iguales, `INT32_MIN`/`INT32_MAX`, datos sesgados).
-- `float`: orden numérico con `-0.0` antes que `+0.0`; los NaN siempre al final, en ascendente y en
-  descendente, en su orden de entrada.
+- `float`/`double`: orden numérico con `-0.0` antes que `+0.0`; los NaN siempre al final, en
+  ascendente y en descendente, en su orden de entrada.
+- Clave-valor estable: valores con claves iguales conservan su orden de entrada, en ambos sentidos.
 - Más rápido que `qsort` en arrays grandes (≥ 1M elementos) en máquinas multinúcleo.
 - Nunca aborta ni corrompe memoria: todo fallo (memoria, hilos, argumentos) vuelve como código de
-  error y deja el array exactamente como estaba.
+  error y deja el array (o los dos arrays, en clave-valor) exactamente como estaba.
 - Embebible: reentrante, sin estado global, sin salida por consola; llamadas concurrentes desde
   distintos hilos del anfitrión sobre arrays distintos son seguras.
 - Compila sin avisos y pasa los tests en Linux, macOS y Windows (MSVC y MinGW).
@@ -62,6 +66,8 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 ## Non-Goals
 
 - Comparador genérico definido por el usuario.
+- Clave-valor con claves `int32`, valores de tamaño distinto de 4 u 8 bytes (p. ej. complejos de
+  16 bytes) y ordenación de `uint64`/`int64` sin valores.
 - Mantener las variantes v1/v2 del prototipo.
 
 ## Success Conditions
@@ -74,8 +80,10 @@ memoria ni de hilos: no se podía confiar en él ni distribuirlo.
 
 ## Capabilities
 
-- **Ordenación en el sitio** de `int32_t`, `uint32_t` y `float`, paralela, con número de hilos
-  automático (núcleos disponibles) o fijado por el usuario.
+- **Ordenación en el sitio** de `int32_t`, `uint32_t`, `float` y `double`, paralela, con número de
+  hilos automático (núcleos disponibles) o fijado por el usuario.
+- **Ordenación clave-valor** con claves `uint32_t`, `float` o `uint64_t` que arrastra un array
+  paralelo de valores de 4 u 8 bytes (enteros, flotantes, punteros).
 - **Orden ascendente o descendente**, a elección del usuario, para todos los tipos.
 - **Opciones** de hilos, dirección y umbral bajo el cual se ordena en secuencial (entradas
   pequeñas); un binario compilado con una versión anterior de la cabecera sigue funcionando.
